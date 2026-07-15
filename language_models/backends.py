@@ -220,3 +220,18 @@ def load_backend(name: str, **kwargs):
     if name not in BACKENDS:
         raise ValueError(f"Unknown backend '{name}'. Choose from {list(BACKENDS)}")
     return BACKENDS[name](**kwargs)
+
+
+def get_d_llm(name: str) -> int:
+    """
+    Look up a backend's hidden dimension without instantiating it.
+
+    D_LLM is a class attribute (fixed by the backbone architecture), so
+    callers that only need the dimension -- e.g. to size Stage-2/3 layers
+    before loading a frozen Stage-1/2 checkpoint -- can skip downloading
+    and loading the (possibly multi-GB) underlying model entirely.
+    """
+    name = name.lower()
+    if name not in BACKENDS:
+        raise ValueError(f"Unknown backend '{name}'. Choose from {list(BACKENDS)}")
+    return BACKENDS[name].D_LLM

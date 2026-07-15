@@ -1,10 +1,10 @@
 """
-NeuroLingua-Bridge — chatbot/fmri_chatbot.py
-fMRI-grounded conversational interface — 3 paradigms (Wei et al. Fig. 5)
+NeuroLingua-Bridge - chatbot/fmri_chatbot.py
+fMRI-grounded conversational interface - 3 paradigms (Wei et al. Fig. 5)
 
-  Paradigm 1 — Single-question Single-answer
-  Paradigm 2 — Multi-question Multi-answer  (separator: |)
-  Paradigm 3 — Open-ended description
+  Paradigm 1 - Single-question Single-answer
+  Paradigm 2 - Multi-question Multi-answer  (separator: |)
+  Paradigm 3 - Open-ended description
 """
 
 from __future__ import annotations
@@ -91,11 +91,11 @@ class fMRILMChatbot:
         print(f"  ASD True : {_LABEL[s['true']]}")
         print(f"  ASD Pred : {_LABEL[s['pred']]} (conf={s['conf']:.1%})")
         print(f"  Sex      : {_SEX.get(s['sex_t'], '?')}")
-        print(f"  Correct? : {'YES ✓' if s['pred']==s['true'] else 'NO ✗'}")
-        print(f"  Lambda   : w_q={w[0]:.3f} w_s={w[1]:.3f} w_g={w[2]:.3f} (Σ={w.sum():.4f})")
+        print(f"  Correct? : {'YES OK' if s['pred']==s['true'] else 'NO X'}")
+        print(f"  Lambda   : w_q={w[0]:.3f} w_s={w[1]:.3f} w_g={w[2]:.3f} (Sigma={w.sum():.4f})")
         print("  Top-3 Networks (Grad-CAM):")
         for net, v in t3:
-            print(f"    {net:<15}: {v:.4f}  {'█'*min(int(v*500),28)}")
+            print(f"    {net:<15}: {v:.4f}  {'#'*min(int(v*500),28)}")
         print("=" * 58)
 
     # ── structured answer engine ──────────────────────────────────────────────
@@ -113,12 +113,12 @@ class fMRILMChatbot:
             return (f"Prediction: **{_LABEL[s['pred']]}** (conf={s['conf']:.1%}). "
                     f"True: {_LABEL[s['true']]}. {'Correct.' if ok else 'Incorrect.'}")
         if any(k in ql for k in ["site", "scanner", "location"]):
-            return f"Scanned at **{s['site']}** (unseen test site — domain-shift evaluation)."
+            return f"Scanned at **{s['site']}** (unseen test site - domain-shift evaluation)."
         if any(k in ql for k in ["network", "grad", "important", "region", "brain"]):
             return f"Most diagnostic networks: **{', '.join(f'{n}({v:.4f})' for n,v in t3)}**."
         if any(k in ql for k in ["lambda", "equation", "loss", "weight"]):
             return (f"L_tok = **{w[0]:.4f}·L_quant + {w[1]:.4f}·L_SigLIP + {w[2]:.4f}·L_GRL** "
-                    f"(Σ={w.sum():.6f}=1.0, softmax-guaranteed).")
+                    f"(Sigma={w.sum():.6f}=1.0, softmax-guaranteed).")
         if any(k in ql for k in ["connectivity", "fc", "descriptor"]):
             return f"FC descriptor: {s['desc'][:300]}..."
 
@@ -154,13 +154,13 @@ class fMRILMChatbot:
             f"1. ASD Assessment\n"
             f"   Prediction = {_LABEL[s['pred']]} (conf={s['conf']:.1%})\n"
             f"   True label = {_LABEL[s['true']]} | "
-            f"{'Correct ✓' if s['pred']==s['true'] else 'Incorrect ✗'}\n\n"
+            f"{'Correct OK' if s['pred']==s['true'] else 'Incorrect X'}\n\n"
             f"2. Diagnostic Networks (Grad-CAM)\n"
             + "".join(f"   - {n}: {v:.4f}\n" for n, v in t3) +
             f"\n3. FC Descriptor\n   {s['desc'][:300]}...\n\n"
             f"4. Lambda Equation (Wei et al. 2026)\n"
             f"   L_tok = {w[0]:.4f}·L_quant + {w[1]:.4f}·L_SigLIP + {w[2]:.4f}·L_GRL\n"
-            f"   Σ = {w.sum():.6f} = 1.0  (softmax-guaranteed)\n"
+            f"   Sigma = {w.sum():.6f} = 1.0  (softmax-guaranteed)\n"
         )
 
     def explain_lambda(self) -> str: return self.chat("lambda equation")

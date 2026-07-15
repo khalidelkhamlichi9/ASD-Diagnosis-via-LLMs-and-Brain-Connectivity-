@@ -1,18 +1,25 @@
 """
-NeuroLingua-Bridge — dataset.py
+NeuroLingua-Bridge - dataset.py
 ABIDE-I dataset: download via Nilearn, preprocessing, fMRI-text descriptors,
-inter-site split and PyTorch DataLoaders.
+integer site indexing, inter-site split and PyTorch DataLoaders.
 
-Preprocessing follows Wei et al. arXiv:2511.21760v3 (2026):
+Preprocessing (fMRI-LM baseline, Wei et al. arXiv:2511.21760v3 (2026)):
   - CPAC pipeline, CC200 atlas (Craddock 200, 200 ROIs, native)
   - Resample to T=160 timepoints
   - 3 FC matrices: Correlation (Fisher-Z), Tangent, Partial Correlation
   - Robust IQR z-score per site
   - 4 text descriptor types: FC, FG, ICA, Graph
-  - Inter-site split: large sites (top 70 % subjects) → Train | small → Test
+
+NeuroLingua-Bridge domain-generalization additions (Sec. 3.1, 3.4, 3.7):
+  - Integer `site_idx` per subject (0..K-1, K=17 for ABIDE-I): required as
+    the target class for the multi-class site-adversarial GRL (Eq. 3), the
+    grouping key for the site-balanced prototype EMA (Eq. 5), and the group
+    label for episodic Group-DRO (Eq. 6).
+  - Inter-site split: large sites (top 70 % subjects) -> Train | small -> Test
+    (unseen-scanner generalization protocol).
 """
 
-import os, math, warnings
+import os, math, json, warnings
 warnings.filterwarnings("ignore")
 
 import numpy as np
@@ -38,6 +45,19 @@ N_ROIS      = 200
 T_TARGET    = 160
 MIN_TP      = 50
 TRAIN_RATIO = 0.70
+
+# ABIDE-I's raw SITE_ID has 20 distinct values because three institutions
+# scanned subjects on two visits/scanners (UM_1/UM_2, UCLA_1/UCLA_2,
+# LEUVEN_1/LEUVEN_2), which the literature (and this paper's "17 sites of
+# ABIDE-I") treats as a single acquisition site each. Left unmerged, the
+# site-adversarial GRL/prototypes/Group-DRO would train a spurious 20-way
+# split instead of the paper's K=17.
+_SITE_MERGE = {"UM_1": "UM", "UM_2": "UM",
+               "UCLA_1": "UCLA", "UCLA_2": "UCLA",
+               "LEUVEN_1": "LEUVEN", "LEUVEN_2": "LEUVEN"}
+
+def _canonical_site(raw_site: str) -> str:
+    return _SITE_MERGE.get(raw_site, raw_site)
 
 NET_NAMES = ["Visual", "SomMot", "DorsAttn", "SalVentAttn",
              "Limbic", "Cont", "Default", "Subcort"]
@@ -132,9 +152,24 @@ def build_descriptor(ts, fc):
 # ABIDE-I download + full preprocessing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_abide(data_dir: str = "./abide_data"):
+def load_abide(data_dir: str = "./abide_data", max_subjects: int = None,
+               use_cache: bool = True):
     """
     Download ABIDE-I (via Nilearn) and return fully preprocessed arrays.
+
+    Every field returned here is deterministic given (data_dir, max_subjects)
+    -- preprocessing does not depend on the training seed -- so this wraps
+    `_preprocess_abide` with an on-disk .npz/.json cache. Without it, each of
+    train_tokenizer.py / train_pretrain_paired.py / train_instruction.py /
+    eval_zeroshot.py (and every seed of a multi-seed sweep) would redo the
+    full FC + graph-descriptor pipeline over the entire cohort from scratch.
+
+    Args:
+        max_subjects: if set, subsample to this many subjects *before*
+            running the (expensive) per-subject FC/descriptor pipeline.
+            Intended for fast smoke tests / CI on a laptop CPU -- the
+            paper's reported numbers use the full ABIDE-I cohort.
+        use_cache: set False to force a fresh preprocessing pass.
 
     Returns
     -------
@@ -142,11 +177,48 @@ def load_abide(data_dir: str = "./abide_data"):
     fc_corr_all : (N, ROI, ROI) float32
     fc_tan_all  : (N, ROI, ROI) float32
     fc_par_all  : (N, ROI, ROI) float32
-    lbl_all     : (N,) int64  — 1=ASD, 0=Control
+    lbl_all     : (N,) int64  - 1=ASD, 0=Control
     sex_all     : (N,) int64
-    site_list   : list[str]
+    site_list   : list[str]        - raw ABIDE SITE_ID strings (kept for the
+                                      inter-site split, which reasons about
+                                      subject counts per raw site name)
     all_descs   : list[str]
+    site_idx    : (N,) int64       - integer site id in [0, K-1], K=17 for
+                                      ABIDE-I. Target class for the 17-way
+                                      site-adversarial GRL (Eq. 3), grouping
+                                      key for the prototype EMA (Eq. 5) and
+                                      the Group-DRO group label (Eq. 6).
+    site2idx    : dict[str, int]   - mapping raw SITE_ID -> site_idx, sorted
+                                      alphabetically for reproducibility.
     """
+    Path(data_dir).mkdir(exist_ok=True)
+    tag       = str(max_subjects) if max_subjects is not None else "full"
+    cache_npz = Path(data_dir) / f"preprocessed_cache_{tag}.npz"
+    cache_json = Path(data_dir) / f"preprocessed_cache_{tag}.json"
+
+    if use_cache and cache_npz.exists() and cache_json.exists():
+        print(f"Loading cached preprocessed ABIDE-I ({tag}) from {cache_npz} ...")
+        z = np.load(cache_npz, allow_pickle=True)
+        meta = json.loads(cache_json.read_text(encoding="utf-8"))
+        return (z["ts_all"], z["fc_corr_all"], z["fc_tan_all"], z["fc_par_all"],
+                z["lbl_all"], z["sex_all"], meta["site_list"], meta["all_descs"],
+                z["site_idx"], {k: int(v) for k, v in meta["site2idx"].items()})
+
+    result = _preprocess_abide(data_dir, max_subjects)
+    if use_cache:
+        (ts_all, fc_corr_all, fc_tan_all, fc_par_all, lbl_all, sex_all,
+         site_list, all_descs, site_idx, site2idx) = result
+        np.savez_compressed(cache_npz, ts_all=ts_all, fc_corr_all=fc_corr_all,
+                           fc_tan_all=fc_tan_all, fc_par_all=fc_par_all,
+                           lbl_all=lbl_all, sex_all=sex_all, site_idx=site_idx)
+        cache_json.write_text(json.dumps({"site_list": list(site_list),
+                                          "all_descs": all_descs,
+                                          "site2idx": site2idx}), encoding="utf-8")
+        print(f"Cached preprocessed ABIDE-I ({tag}) -> {cache_npz}")
+    return result
+
+
+def _preprocess_abide(data_dir: str, max_subjects: int = None):
     assert NILEARN_OK, "pip install nilearn"
     Path(data_dir).mkdir(exist_ok=True)
     print("Downloading ABIDE-I (pipeline=cpac, rois_cc200, 200 ROIs)...")
@@ -154,15 +226,27 @@ def load_abide(data_dir: str = "./abide_data"):
                                band_pass_filtering=True,
                                global_signal_regression=False,
                                derivatives=["rois_cc200"],
-                               quality_checked=True, verbose=0)
+                               quality_checked=False, verbose=0)
     pheno    = pd.DataFrame(abide.phenotypic)
+    qc_mask  = pheno.get("qc_rater_1", pd.Series([""] * len(pheno))).astype(str).str.upper() == "OK"
+    qc_idx   = np.where(qc_mask)[0]
+    pheno    = pheno.iloc[qc_idx].reset_index(drop=True)
+    rois_qc  = [abide.rois_cc200[i] for i in qc_idx]
+
     dx_arr   = pd.to_numeric(pheno["DX_GROUP"],  errors="coerce").fillna(0).values
     sex_raw  = pd.to_numeric(pheno["SEX"], errors="coerce").fillna(2).astype(int).values
-    site_raw = pheno.get("SITE_ID", pd.Series(["UNK"] * len(pheno))).values
+    site_raw = np.array([_canonical_site(s) for s in
+                         pheno.get("SITE_ID", pd.Series(["UNK"] * len(pheno))).values])
 
-    valid_idx = [i for i, ts in enumerate(abide.rois_cc200)
+    valid_idx = [i for i, ts in enumerate(rois_qc)
                  if np.array(ts).ndim == 2 and np.array(ts).shape[0] > 10]
-    roi_all  = [abide.rois_cc200[i] for i in valid_idx]
+
+    if max_subjects is not None and max_subjects < len(valid_idx):
+        rng = np.random.RandomState(SEED)
+        valid_idx = list(rng.choice(valid_idx, size=max_subjects, replace=False))
+        print(f"  (smoke-test subsample: {max_subjects}/{len(rois_qc)} subjects)")
+
+    roi_all  = [rois_qc[i] for i in valid_idx]
     sex_v    = sex_raw[valid_idx]
     site_v   = site_raw[valid_idx]
 
@@ -224,9 +308,96 @@ def load_abide(data_dir: str = "./abide_data"):
     all_descs = [build_descriptor(ts_all[i], fc_corr_all[i])
                  for i in tqdm(range(len(ts_all)), desc="Descriptors")]
 
+    # Integer site index (Sec. 3.4/3.5/3.7): sorted alphabetically so the
+    # mapping is deterministic across runs/checkpoints.
+    sites_sorted = sorted(set(site_list))
+    site2idx     = {s: k for k, s in enumerate(sites_sorted)}
+    site_idx     = np.array([site2idx[s] for s in site_list], dtype=np.int64)
+
     print(f"Done: {len(ts_all)} subjects  ASD={lbl_all.sum()}  "
-          f"CTL={(lbl_all == 0).sum()}  sites={len(np.unique(site_list))}")
-    return ts_all, fc_corr_all, fc_tan_all, fc_par_all, lbl_all, sex_all, site_list, all_descs
+          f"CTL={(lbl_all == 0).sum()}  sites={len(sites_sorted)}")
+    return (ts_all, fc_corr_all, fc_tan_all, fc_par_all, lbl_all, sex_all,
+            site_list, all_descs, site_idx, site2idx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Site harmonization (ComBat-lite; Fortin et al. 2018 [9], Pomponio 2020 [23])
+# ─────────────────────────────────────────────────────────────────────────────
+
+def harmonize_fc_sitewise(fc_all: np.ndarray, site_list) -> np.ndarray:
+    """
+    Remove first-order acquisition-site batch effects from FC matrices by
+    standardizing every connectivity edge *within each site* to zero mean
+    and unit variance (a label-free ComBat-lite).
+
+    Cross-site ASD failure is driven largely by scanner/site batch effects:
+    each site's FC edges sit at a site-specific mean/scale, so a classifier
+    trained on some sites sees a shifted distribution on unseen ones. This
+    normalizes each site's edge distribution to a common location/scale,
+    which is exactly the shift the site-adversarial GRL tries to learn away
+    but can address directly on the raw FC that feeds the classifier.
+
+    Label-free and applied independently per site (train sites and unseen
+    test sites each use their own subjects' statistics), so there is no
+    train->test label leakage. This is the standard harmonization setting
+    used by ComBat (the paper cites both Fortin et al. and Pomponio et al.).
+    Sites with <2 subjects are left unchanged (no variance to estimate).
+    """
+    out = fc_all.copy()
+    site_arr = np.array(site_list)
+    for s in np.unique(site_arr):
+        m = site_arr == s
+        if m.sum() >= 2:
+            mu = out[m].mean(axis=0, keepdims=True)
+            sd = out[m].std(axis=0, keepdims=True) + 1e-6
+            out[m] = (out[m] - mu) / sd
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-subject text-descriptor embeddings (Sec. 3.2, Eq. 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def embed_descriptors(llm, all_descs, lm_name: str, data_dir: str = "./abide_data",
+                      max_subjects: int = None, use_cache: bool = True) -> np.ndarray:
+    """
+    Embed every subject's *own* fMRI-text descriptor (built per-subject by
+    `build_descriptor` from that subject's real FC/graph features) through
+    the frozen LLM, returning an (N, D_LLM) array aligned index-for-index
+    with `all_descs` / `ts_all` / `lbl_all` / etc.
+
+    This is the correct target for the CLIP/SigLIP contrastive loss (Eq. 2)
+    and the F2T alignment loss: each subject is paired with its own text
+    description, and the loss is a genuine batch-level InfoNCE contrast
+    against the *other* subjects' descriptors.
+
+    Do NOT replace this with a per-class lookup keyed by `label` -- doing so
+    lets the target embedding leak the ground-truth diagnosis directly (the
+    model can then trivially satisfy the loss by mapping same-label subjects
+    near one of only 2 fixed points, learning nothing about the input fMRI
+    signal, which collapses the downstream ASD classifier).
+
+    Cached to disk (like `load_abide`) since embedding ~1000 subjects
+    through a multi-GB LLM is the single most expensive one-time step and
+    is identical across every Stage-1/Stage-2 run and every seed.
+    """
+    tag = str(max_subjects) if max_subjects is not None else "full"
+    cache_path = Path(data_dir) / f"text_emb_{lm_name}_{tag}.npy"
+    if use_cache and cache_path.exists():
+        arr = np.load(cache_path)
+        if arr.shape[0] == len(all_descs):
+            print(f"Loading cached {lm_name} text embeddings ({tag}) from {cache_path} ...")
+            return arr
+        print(f"Cache {cache_path} has wrong subject count, recomputing.")
+
+    print(f"Embedding {len(all_descs)} per-subject descriptors via {lm_name} "
+         f"(cached for all future Stage-1/Stage-2 runs/seeds)...")
+    embs = np.stack([llm.get_embedding(d).numpy()
+                     for d in tqdm(all_descs, desc="Text embeddings")])
+    if use_cache:
+        np.save(cache_path, embs)
+        print(f"Cached text embeddings -> {cache_path}")
+    return embs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,8 +407,8 @@ def load_abide(data_dir: str = "./abide_data"):
 def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO):
     """
     Adaptive inter-site split.
-    Large sites (top `train_ratio` of subjects) → Train + Val.
-    Small sites → Test  (unseen domain, domain-shift evaluation).
+    Large sites (top `train_ratio` of subjects) -> Train + Val.
+    Small sites -> Test  (unseen domain, domain-shift evaluation).
     """
     site_arr    = np.array(site_list)
     site_counts = pd.Series(site_list).value_counts().sort_values(ascending=False)
@@ -264,7 +435,7 @@ def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO):
         sz = max(2, int(len(train_full) * 0.15))
         train_idx, val_idx = train_full[sz:], train_full[:sz]
 
-    print(f"Split — Train:{len(train_idx)}  Val:{len(val_idx)}  Test:{len(test_idx)}")
+    print(f"Split - Train:{len(train_idx)}  Val:{len(val_idx)}  Test:{len(test_idx)}")
     print(f"  Train sites ({len(big_sites)}): {big_sites}")
     print(f"  Test  sites ({len(small_sites)}): {small_sites}")
     return train_idx, val_idx, test_idx, big_sites, small_sites
@@ -275,14 +446,20 @@ def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ABIDEDataset(Dataset):
-    def __init__(self, ts, fc_corr, fc_tan, fc_par, labels, sex,
-                 descs, tokenizer=None, max_len: int = 256, augment: bool = False):
+    def __init__(self, ts, fc_corr, fc_tan, fc_par, labels, sex, site_idx,
+                 descs, text_emb=None, tokenizer=None, max_len: int = 256,
+                 augment: bool = False):
         self.ts, self.fc_corr = ts.astype(np.float32), fc_corr.astype(np.float32)
         self.fc_tan, self.fc_par = fc_tan.astype(np.float32), fc_par.astype(np.float32)
-        self.labels  = np.array(labels, dtype=np.int64)
-        self.sex     = np.clip(np.array(sex) - 1, 0, 1).astype(np.int64)
-        self.descs   = descs
-        self.augment = augment
+        self.labels   = np.array(labels, dtype=np.int64)
+        self.sex      = np.clip(np.array(sex) - 1, 0, 1).astype(np.int64)
+        self.site_idx = np.array(site_idx, dtype=np.int64)
+        self.descs    = descs
+        self.augment  = augment
+        # Per-subject descriptor embedding (Eq. 2) -- NOT a per-class lookup.
+        # See dataset.embed_descriptors for why that distinction matters.
+        self.text_emb = (text_emb.astype(np.float32) if text_emb is not None
+                         else np.zeros((len(labels), 1), dtype=np.float32))
         if tokenizer is not None:
             self.tok_ids = np.array([
                 tokenizer(d, max_length=max_len, truncation=True,
@@ -298,23 +475,30 @@ class ABIDEDataset(Dataset):
         if self.augment:
             ts = ts + torch.randn_like(ts) * 0.02
             if torch.rand(1) > 0.5: ts = ts.flip(0)
-        return {"ts":      ts,
-                "fc_corr": torch.from_numpy(self.fc_corr[i]),
-                "fc_tan":  torch.from_numpy(self.fc_tan[i]),
-                "fc_par":  torch.from_numpy(self.fc_par[i]),
-                "label":   torch.tensor(self.labels[i]),
-                "sex":     torch.tensor(self.sex[i]),
-                "tok_ids": torch.from_numpy(self.tok_ids[i])}
+        return {"ts":       ts,
+                "fc_corr":  torch.from_numpy(self.fc_corr[i]),
+                "fc_tan":   torch.from_numpy(self.fc_tan[i]),
+                "fc_par":   torch.from_numpy(self.fc_par[i]),
+                "label":    torch.tensor(self.labels[i]),
+                "sex":      torch.tensor(self.sex[i]),
+                "site":     torch.tensor(self.site_idx[i]),
+                "text_emb": torch.from_numpy(self.text_emb[i]),
+                "tok_ids":  torch.from_numpy(self.tok_ids[i])}
 
 
 def make_loaders(ts_all, fc_corr_all, fc_tan_all, fc_par_all,
-                 lbl_all, sex_all, all_descs,
-                 train_idx, val_idx, test_idx,
+                 lbl_all, sex_all, all_descs, site_idx,
+                 train_idx, val_idx, test_idx, text_emb=None,
                  tokenizer=None, batch_size: int = 4, max_len: int = 256):
     def _mk(idx, aug, shuf):
         ds = ABIDEDataset(ts_all[idx], fc_corr_all[idx], fc_tan_all[idx], fc_par_all[idx],
-                          lbl_all[idx], sex_all[idx], [all_descs[j] for j in idx],
+                          lbl_all[idx], sex_all[idx], site_idx[idx],
+                          [all_descs[j] for j in idx],
+                          text_emb=(text_emb[idx] if text_emb is not None else None),
                           tokenizer=tokenizer, max_len=max_len, augment=aug)
-        return DataLoader(ds, batch_size=batch_size, shuffle=shuf,
+        # RandomSampler raises on an empty dataset, which happens whenever a
+        # caller only needs the test split (e.g. eval_zeroshot.py passes
+        # empty train/val index arrays) -- shuffling is meaningless there anyway.
+        return DataLoader(ds, batch_size=batch_size, shuffle=(shuf and len(idx) > 0),
                           drop_last=False, pin_memory=torch.cuda.is_available())
     return _mk(train_idx, True, True), _mk(val_idx, False, False), _mk(test_idx, False, False)
