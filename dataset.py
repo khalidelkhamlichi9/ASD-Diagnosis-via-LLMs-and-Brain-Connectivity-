@@ -149,6 +149,93 @@ def build_descriptor(ts, fc):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Subject-count selection (export / download-time subsetting)
+# ─────────────────────────────────────────────────────────────────────────────
+
+SUBJECT_COUNT_PRESETS = [5, 10, 20, 50, 100]
+
+
+def resolve_subject_count(requested, n_total: int) -> int:
+    """
+    Validate and clamp a user-requested subject export count against the
+    number of subjects actually available after preprocessing.
+
+    Args:
+        requested: desired subject count. `None` (or the string "all")
+            means "export every available subject". Otherwise must be a
+            positive integer.
+        n_total: number of subjects available to export from.
+
+    Returns:
+        The number of subjects to actually export: `n_total` if `requested`
+        is None/"all" or exceeds `n_total`, otherwise `requested`.
+
+    Raises:
+        ValueError: if `requested` is not a positive integer and not
+            None/"all".
+    """
+    if requested is None or (isinstance(requested, str) and requested.strip().lower() == "all"):
+        return n_total
+    if isinstance(requested, bool):
+        raise ValueError(f"Number of subjects must be a positive integer or 'all', got {requested!r}.")
+    if isinstance(requested, float):
+        if not requested.is_integer():
+            raise ValueError(f"Number of subjects must be a whole number, got {requested!r}.")
+        n = int(requested)
+    elif isinstance(requested, (int, np.integer)):
+        n = int(requested)
+    elif isinstance(requested, str):
+        s = requested.strip()
+        if not (s.lstrip("-").isdigit()):
+            raise ValueError(f"Number of subjects must be a positive integer or 'all', got {requested!r}.")
+        n = int(s)
+    else:
+        raise ValueError(f"Number of subjects must be a positive integer or 'all', got {requested!r}.")
+    if n <= 0:
+        raise ValueError(f"Number of subjects must be a positive integer, got {n}.")
+    if n > n_total:
+        print(f"Requested {n} subjects but only {n_total} are available -- exporting all {n_total}.")
+        return n_total
+    return n
+
+
+def prompt_subject_count(n_total: int) -> int:
+    """
+    Interactive menu for choosing how many (preprocessed) subjects to
+    export, offered as fixed presets plus a manual entry option. Presets
+    larger than `n_total` are hidden since they would just export everything.
+
+    Returns the resolved, validated subject count (never raises on bad
+    input -- re-prompts instead, since this is meant for interactive use).
+    """
+    options = [p for p in SUBJECT_COUNT_PRESETS if p < n_total]
+    print(f"\n{len(options) + 2} export options ({n_total} subjects available):")
+    for i, p in enumerate(options, start=1):
+        print(f"  {i}. First {p} subjects")
+    print(f"  {len(options) + 1}. All {n_total} subjects")
+    print(f"  {len(options) + 2}. Enter a custom number")
+
+    while True:
+        choice = input(f"Choose an option [1-{len(options) + 2}]: ").strip()
+        if choice == str(len(options) + 1):
+            return n_total
+        if choice == str(len(options) + 2):
+            custom = input("Enter number of subjects: ").strip()
+            try:
+                return resolve_subject_count(custom, n_total)
+            except ValueError as e:
+                print(f"  Invalid input: {e}")
+                continue
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return options[idx]
+        except ValueError:
+            pass
+        print("  Invalid choice, please try again.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ABIDE-I download + full preprocessing
 # ─────────────────────────────────────────────────────────────────────────────
 

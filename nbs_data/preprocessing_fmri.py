@@ -14,9 +14,40 @@ import pandas as pd
 from nilearn.datasets import fetch_atlas_schaefer_2018
 from nilearn.image import mean_img, resample_to_img
 from nilearn.input_data import NiftiLabelsMasker
+from scipy.interpolate import interp1d
 from tqdm import tqdm
 
-from temporal_resample import resample_fmri_linear
+
+def resample_fmri_linear(time_series: np.ndarray, source_tr: float,
+                         target_tr: float) -> np.ndarray:
+    """
+    Linearly resample an fMRI time series from `source_tr` to `target_tr`
+    seconds per volume along its last axis.
+
+    Args:
+        time_series: (..., T) array, time as the last axis (this module
+            always calls it as `resample_fmri_linear(x.T, ...)`, i.e. with
+            shape (n_rois, T)).
+        source_tr / target_tr: acquisition / desired repetition time in
+            seconds.
+
+    Returns:
+        (..., T') array, T' = round(T * source_tr / target_tr).
+
+    Note: this repo's main ABIDE-I pipeline (see dataset.py:_resample) uses
+    a fixed target length T=160 rather than a target TR, since ABIDE-I sites
+    vary in TR but the model needs a fixed sequence length; this TR-based
+    resampler is kept for the ABCD/UKB-style preprocessing path below, which
+    targets a common TR across cohorts instead.
+    """
+    T = time_series.shape[-1]
+    if T < 2:
+        return time_series.astype(np.float32)
+    T_new = max(2, int(round(T * source_tr / target_tr)))
+    src_t = np.linspace(0, 1, T)
+    dst_t = np.linspace(0, 1, T_new)
+    f = interp1d(src_t, time_series, axis=-1, kind="linear")
+    return f(dst_t).astype(np.float32)
 
 
 @dataclass

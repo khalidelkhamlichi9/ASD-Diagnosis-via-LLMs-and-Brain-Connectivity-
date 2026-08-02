@@ -54,21 +54,19 @@ configuration; its small n explains the wider variance on the worst-site metric.
 ```
 NeuroLingua-Bridge/
 ├── dataset.py                        # ABIDE-I loader (CC200, 200 ROIs, 17 sites, inter-site split)
+├── download_dataset.py               # Download/preprocess + export a chosen subject count
+├── test_subject_selection.py         # Smoke tests for the subject-count export feature
 ├── model_fmrilm_abide.py             # Encoder + VQ + 17-way site-adversarial GRL + prototypes
+│                                      # (self-contained: encoder, VQ codebook, classifier all live here)
 ├── train_tokenizer.py                # Stage 1: tokenizer (L_quant + L_CLIP + L_site + L_proto)
 ├── train_pretrain_paired.py          # Stage 2: frozen-LLM alignment (F2F + F2T)
 ├── train_instruction.py              # Stage 3: ASD classifier + episodic Group-DRO
 ├── eval_zeroshot.py                  # Evaluation on held-out unseen sites
-├── utils.py / utils_loss.py          # Shared helpers and loss terms
-├── brain_encoder/                    # Transformer encoder + patch embedding
-│   ├── patch_embed.py
-│   └── vision_transformer.py
+├── utils_loss.py                     # Shared loss terms (siglip_loss)
 ├── language_models/
 │   └── backends.py                   # 5 LLM backends (gpt2, clinicalt5, deepseek, grok, gemini)
-├── quantizers/                       # vq.py, fsq.py, norm_ema_quantizer.py
 ├── chatbot/
-│   └── fmri_chatbot.py               # 3-paradigm clinical chatbot interface
-├── metrics/                          # binary, multiclass, calibration, fairness (AUC, F1, worst-site)
+│   └── fmri_chatbot.py               # 3-paradigm clinical chatbot interface (standalone demo, Fig. 3)
 ├── configs/                          # dataset_config.yaml, vit_base_p32/p160.yaml, deepspeed_zero2.json
 ├── scripts/                          # run_deepseek.sh, run_gpt2.sh, run_clinicalt5.sh, run_grok.sh, run_gemini.sh
 ├── nbs_data/                         # preprocessing_fmri.py, get_fmri_discriptor.py, prompt_expansion.py
@@ -99,6 +97,40 @@ git clone https://github.com/YOUR_USERNAME/NeuroLingua-Bridge.git
 cd NeuroLingua-Bridge
 pip install -r requirements.txt
 ```
+
+---
+
+## Downloading & Exporting a Subset of Subjects
+
+`download_dataset.py` downloads/preprocesses ABIDE-I once (cached on disk by
+`dataset.load_abide`, so re-running is instant) and lets you export just the
+first *N* preprocessed subjects instead of the whole cohort — useful for
+quick local inspection or sharing a small sample.
+
+```bash
+# Interactive menu: first 5 / 10 / 20 / 50 / 100 / all / custom N
+python download_dataset.py
+
+# Non-interactive
+python download_dataset.py --n_subjects 20
+python download_dataset.py --n_subjects all
+```
+
+Input is validated: non-positive or non-numeric values are rejected, and a
+count larger than the number of available subjects is automatically clamped
+to the full cohort (with a printed notice) rather than erroring out. The
+export writes two files to `<data_dir>/exports/`:
+
+- `abide_export_<N>.npz` — `ts_all`, `fc_corr_all`, `fc_tan_all`,
+  `fc_par_all`, `lbl_all`, `sex_all`, `site_idx` for the selected subjects,
+  in the same array layout as the internal preprocessing cache.
+- `abide_export_<N>_metadata.csv` — one row per subject (index, label,
+  sex, site, fMRI-text descriptor).
+
+This is purely a post-processing export step: it never changes what
+`train_tokenizer.py` / `train_pretrain_paired.py` / `train_instruction.py`
+/ `eval_zeroshot.py` do with `--max_subjects` (their own, separate,
+*random* subsampling flag used for fast smoke tests — see below).
 
 ---
 

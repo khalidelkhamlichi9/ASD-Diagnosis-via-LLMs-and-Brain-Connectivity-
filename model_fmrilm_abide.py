@@ -244,23 +244,33 @@ class NormEMAVQ(nn.Module):
         idx = d.argmin(1)
         zq  = self.embed(idx).view(z.shape)
         if self.training:
-            oh = F.one_hot(idx, self.K).float()
-            self.ema_cnt = self.decay * self.ema_cnt + (1 - self.decay) * oh.sum(0)
-            self.ema_w   = self.decay * self.ema_w   + (1 - self.decay) * (oh.T @ zf)
-            dead = self.ema_cnt < 0.5
-            n_d  = int(dead.sum())
-            if n_d:
-                n_p  = min(n_d, zf.shape[0])
-                perm = torch.randperm(zf.shape[0], device=zf.device)[:n_p]
-                di   = torch.where(dead)[0][:n_p]
-                # Add noise so a reset entry doesn't immediately collide
-                # with the exact vector the dominant entry already owns
-                # (a bare copy just re-creates the collapse next step).
-                noise = torch.randn(n_p, self.D, device=zf.device) * 0.05
-                self.ema_w.data[di]   = zf[perm] + noise
-                self.ema_cnt.data[di] = 1.
-            self.embed.weight.data = F.normalize(
-                self.ema_w / (self.ema_cnt.unsqueeze(1) + 1e-5), dim=-1)
+            # EMA codebook bookkeeping must never touch the autograd graph:
+            # `zf` carries a grad_fn back to the encoder, and without
+            # `no_grad()` here, `self.ema_w` (a persistent buffer reassigned
+            # every step) inherits that grad_fn. Because it is read again on
+            # the *next* call, each step chains a fresh graph onto the
+            # previous one instead of being freed, retaining every prior
+            # step's saved activations indefinitely -- an unbounded memory
+            # leak that eventually OOMs on any non-trivial Stage-1 run.
+            with torch.no_grad():
+                zf_ng = zf.detach()
+                oh = F.one_hot(idx, self.K).float()
+                self.ema_cnt = self.decay * self.ema_cnt + (1 - self.decay) * oh.sum(0)
+                self.ema_w   = self.decay * self.ema_w   + (1 - self.decay) * (oh.T @ zf_ng)
+                dead = self.ema_cnt < 0.5
+                n_d  = int(dead.sum())
+                if n_d:
+                    n_p  = min(n_d, zf_ng.shape[0])
+                    perm = torch.randperm(zf_ng.shape[0], device=zf_ng.device)[:n_p]
+                    di   = torch.where(dead)[0][:n_p]
+                    # Add noise so a reset entry doesn't immediately collide
+                    # with the exact vector the dominant entry already owns
+                    # (a bare copy just re-creates the collapse next step).
+                    noise = torch.randn(n_p, self.D, device=zf_ng.device) * 0.05
+                    self.ema_w.data[di]   = zf_ng[perm] + noise
+                    self.ema_cnt.data[di] = 1.
+                self.embed.weight.data = F.normalize(
+                    self.ema_w / (self.ema_cnt.unsqueeze(1) + 1e-5), dim=-1)
         return z + (zq - z).detach(), self.beta * F.mse_loss(zq.detach(), z), idx
 
     @property

@@ -33,6 +33,69 @@ from language_models import get_d_llm
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# The only checkpoint key whose *shape* legitimately depends on how many
+# distinct sites a run sees: the final Linear(128, k_sites) of the 17-way
+# site discriminator (see `load_stage2_checkpoint`).
+_SITE_DISC_KEY_PREFIX = "tok.site_disc.net.6."
+
+
+def load_stage2_checkpoint(s2, ckpt_path: str, device=DEVICE):
+    """
+    Load a Stage-2 (`AlignmentModel`) checkpoint into `s2` in place, tolerant
+    of exactly one legitimate mismatch and nothing else.
+
+    `tok.site_disc.net.6.{weight,bias}` (the 17-way site discriminator's
+    final layer) is the only part of the checkpoint whose *shape* depends on
+    k_sites, so it will legitimately differ if Stage 2 was trained on a
+    cohort with a different number of distinct sites than this run (e.g. a
+    --max_subjects smoke test that happens to see fewer than 17 sites);
+    site_disc is unused after Stage 1 either way, so re-initializing it is
+    harmless.
+
+    Plain `load_state_dict(..., strict=False)` does NOT protect against this:
+    `strict=False` only tolerates missing/unexpected *keys*, not a shape
+    mismatch on a key present in both state dicts -- it still raises
+    RuntimeError on the size mismatch above, so any run whose site count
+    differed from the checkpoint's used to crash outright regardless of
+    `strict`. This filters out only the expected shape-mismatched key(s)
+    before loading, then raises loudly on anything else missing/unexpected/
+    mismatched (which would indicate a genuinely incompatible checkpoint).
+
+    Returns True if the site discriminator was re-initialized (k_sites
+    differed from the checkpoint), False if the checkpoint matched exactly.
+    """
+    cp = torch.load(ckpt_path, map_location=device, weights_only=False)
+    checkpoint_sd = cp["s2"]
+    own_sd = s2.state_dict()
+
+    shape_mismatched = {k for k in checkpoint_sd
+                        if k in own_sd and own_sd[k].shape != checkpoint_sd[k].shape}
+    bad_shape_mismatch = [k for k in shape_mismatched
+                          if not k.startswith(_SITE_DISC_KEY_PREFIX)]
+    if bad_shape_mismatch:
+        raise RuntimeError(
+            f"Stage-2 checkpoint {ckpt_path} has unexpected shape mismatches "
+            f"(beyond the k_sites-dependent site-discriminator layer): "
+            f"{bad_shape_mismatch}. This likely means the checkpoint was "
+            f"trained with a different model architecture/version -- "
+            f"retrain Stage 2 or point --ckpt_s2 at a matching checkpoint.")
+
+    filtered_sd = {k: v for k, v in checkpoint_sd.items() if k not in shape_mismatched}
+    result = s2.load_state_dict(filtered_sd, strict=False)
+    bad_missing = [k for k in result.missing_keys
+                   if not k.startswith(_SITE_DISC_KEY_PREFIX)]
+    bad_unexpected = list(result.unexpected_keys)  # never expected
+    if bad_missing or bad_unexpected:
+        raise RuntimeError(
+            f"Stage-2 checkpoint {ckpt_path} did not load cleanly beyond the "
+            f"expected k_sites-dependent site-discriminator mismatch:\n"
+            f"  unexpected missing keys:    {bad_missing}\n"
+            f"  unexpected checkpoint keys: {bad_unexpected}\n"
+            f"This likely means the checkpoint was trained with a different "
+            f"model architecture/version -- retrain Stage 2 or point --ckpt_s2 "
+            f"at a matching checkpoint.")
+    return bool(shape_mismatched)
+
 
 def evaluate(clf, loader, idx2site=None):
     """
@@ -100,9 +163,14 @@ def train(args):
 
     ckpt_s2 = args.ckpt_s2 or f"ckpt_s2_{args.lm_name}_seed{args.seed}.pt"
     if os.path.exists(ckpt_s2):
-        cp = torch.load(ckpt_s2, map_location=DEVICE, weights_only=False)
-        s2.load_state_dict(cp["s2"], strict=False)
-        print(f"Stage-2 loaded: {ckpt_s2}")
+        reinit_site_disc = load_stage2_checkpoint(s2, ckpt_s2, DEVICE)
+        if reinit_site_disc:
+            print(f"Stage-2 loaded: {ckpt_s2}  "
+                  f"(site-discriminator re-initialized: k_sites differs from "
+                  f"the Stage-2 training run, harmless -- site_disc is unused "
+                  f"after Stage 1)")
+        else:
+            print(f"Stage-2 loaded: {ckpt_s2}")
     elif args.ckpt_s2:
         raise FileNotFoundError(f"--ckpt_s2 {args.ckpt_s2} not found")
 
