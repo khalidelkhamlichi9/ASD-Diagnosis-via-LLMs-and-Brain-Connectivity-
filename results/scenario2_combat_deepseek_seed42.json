@@ -1,0 +1,23 @@
+{
+  "method": "COMBAT + deepseek LLM + GRL + Group-DRO",
+  "backbone": "combat",
+  "lm_name": "deepseek",
+  "seed": 42,
+  "n_params": 5409733,
+  "acc": 58.12,
+  "bacc": 57.27,
+  "auc": 60.48,
+  "worst_site_acc": 39.39,
+  "per_site_acc": {
+    "CALTECH": 45.45,
+    "CMU": 78.26,
+    "KKI": 56.25,
+    "MAX_MUN": 57.69,
+    "OHSU": 56.0,
+    "OLIN": 70.59,
+    "SBL": 40.0,
+    "SDSU": 39.39,
+    "STANFORD": 78.38,
+    "TRINITY": 57.45
+  }
+}

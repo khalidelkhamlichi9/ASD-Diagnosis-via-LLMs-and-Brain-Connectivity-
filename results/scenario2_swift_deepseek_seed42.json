@@ -1,0 +1,23 @@
+{
+  "method": "SWIFT + deepseek LLM + GRL + Group-DRO",
+  "backbone": "swift",
+  "lm_name": "deepseek",
+  "seed": 42,
+  "n_params": 371973,
+  "acc": 46.72,
+  "bacc": 48.4,
+  "auc": 48.3,
+  "worst_site_acc": 33.33,
+  "per_site_acc": {
+    "CALTECH": 36.36,
+    "CMU": 65.22,
+    "KKI": 50.0,
+    "MAX_MUN": 48.08,
+    "OHSU": 48.0,
+    "OLIN": 52.94,
+    "SBL": 36.67,
+    "SDSU": 33.33,
+    "STANFORD": 48.65,
+    "TRINITY": 46.81
+  }
+}

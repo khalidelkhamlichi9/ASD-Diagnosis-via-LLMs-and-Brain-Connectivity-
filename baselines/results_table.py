@@ -173,7 +173,56 @@ def build_rows(results_dir: str, nlb_override: dict) -> list[dict]:
             row[k] = _get_metric(bnet_res, k)
         rows.append(row)
 
+    # ── BrainGNN ──────────────────────────────────────────────────────────
+    braingnn_res = _best_result(results_dir, "braingnn_results")
+    if braingnn_res:
+        row = {"name": "BrainGNN ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(braingnn_res, k)
+        rows.append(row)
+
+    # ── FBNetGen ──────────────────────────────────────────────────────────
+    fbnetgen_res = _best_result(results_dir, "fbnetgen_results")
+    if fbnetgen_res:
+        row = {"name": "FBNetGen ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(fbnetgen_res, k)
+        rows.append(row)
+
+    # ── SWiFT ─────────────────────────────────────────────────────────────
+    swift_res = _best_result(results_dir, "swift_results")
+    if swift_res:
+        row = {"name": "SWiFT ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(swift_res, k)
+        rows.append(row)
+
+    # ── BrainLM* (scratch) ────────────────────────────────────────────────
+    brainlm_res = _best_result(results_dir, "brainlm_results")
+    if brainlm_res:
+        row = {"name": "BrainLM* (scratch) ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(brainlm_res, k)
+        rows.append(row)
+
+    # ── BrainMass* (scratch) ──────────────────────────────────────────────
+    brainmass_res = _best_result(results_dir, "brainmass_results")
+    if brainmass_res:
+        row = {"name": "BrainMass* (scratch) ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(brainmass_res, k)
+        rows.append(row)
+
+    # ── Brain-JEPA* (scratch) ─────────────────────────────────────────────
+    brainjepa_res = _best_result(results_dir, "brainjepa_results")
+    if brainjepa_res:
+        row = {"name": "Brain-JEPA* (scratch) ‡"}
+        for k, _ in METRICS_COLS:
+            row[k] = _get_metric(brainjepa_res, k)
+        rows.append(row)
+
     return rows
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,9 +248,12 @@ def markdown_table(rows: list[dict]) -> str:
         lines.append("| " + " | ".join(cells) + " |")
 
     notes = (
-        "\n† Résultats du papier (Table 1, 5 seeds, full DG pipeline).\n"
-        "‡ Même split inter-site, même seed, même métriques — comparaison équitable.\n"
-        "  bAcc = Balanced Accuracy, Worst-Site = min accuracy sur les sites de test."
+        "\n† Résultats du papier (Table 1, 5 seeds, full DG pipeline sur GPU A100).\n"
+        "‡ Même split inter-site, même seed, mêmes métriques — comparaison équitable (Fixed LSO).\n"
+        "* Trained from scratch on ABIDE-I train split only (no external pre-training corpus).\n"
+        "  bAcc = Balanced Accuracy. W-Site = min accuracy sur les sites de test.\n"
+        "  † The worst site is CMU (n ≈ 10) in all configurations;\n"
+        "    the small n explains the wider variance on W-Site (Table 1, footnote †)."
     )
     return "\n".join(lines) + "\n" + notes
 

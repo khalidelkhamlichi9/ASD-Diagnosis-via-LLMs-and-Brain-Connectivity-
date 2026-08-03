@@ -1,0 +1,23 @@
+{
+  "method": "BRAINGNN + deepseek LLM + GRL + Group-DRO",
+  "backbone": "braingnn",
+  "lm_name": "deepseek",
+  "seed": 42,
+  "n_params": 301037,
+  "acc": 58.69,
+  "bacc": 57.16,
+  "auc": 56.61,
+  "worst_site_acc": 46.15,
+  "per_site_acc": {
+    "CALTECH": 54.55,
+    "CMU": 65.22,
+    "KKI": 64.58,
+    "MAX_MUN": 46.15,
+    "OHSU": 48.0,
+    "OLIN": 61.76,
+    "SBL": 50.0,
+    "SDSU": 57.58,
+    "STANFORD": 81.08,
+    "TRINITY": 57.45
+  }
+}
