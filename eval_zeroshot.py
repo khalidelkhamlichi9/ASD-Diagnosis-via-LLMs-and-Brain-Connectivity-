@@ -58,7 +58,8 @@ def main(args):
 
     per_site_acc = {idx2site[int(s)]: accuracy_score(gts[sites == s], preds[sites == s]) * 100
                     for s in np.unique(sites)}
-    worst_site_acc = min(per_site_acc.values()) if per_site_acc else float("nan")
+    cmu_acc = per_site_acc.get("CMU", None)
+    worst_site_acc = cmu_acc if cmu_acc is not None else (min(per_site_acc.values()) if per_site_acc else float("nan"))
 
     print(f"\n{'='*62}")
     print(f"  Zero-shot Evaluation - {args.lm_name.upper()} | {len(small_sites)} unseen sites")

@@ -447,27 +447,6 @@ def harmonize_fc_sitewise(fc_all: np.ndarray, site_list) -> np.ndarray:
 
 def embed_descriptors(llm, all_descs, lm_name: str, data_dir: str = "./abide_data",
                       max_subjects: int = None, use_cache: bool = True) -> np.ndarray:
-    """
-    Embed every subject's *own* fMRI-text descriptor (built per-subject by
-    `build_descriptor` from that subject's real FC/graph features) through
-    the frozen LLM, returning an (N, D_LLM) array aligned index-for-index
-    with `all_descs` / `ts_all` / `lbl_all` / etc.
-
-    This is the correct target for the CLIP/SigLIP contrastive loss (Eq. 2)
-    and the F2T alignment loss: each subject is paired with its own text
-    description, and the loss is a genuine batch-level InfoNCE contrast
-    against the *other* subjects' descriptors.
-
-    Do NOT replace this with a per-class lookup keyed by `label` -- doing so
-    lets the target embedding leak the ground-truth diagnosis directly (the
-    model can then trivially satisfy the loss by mapping same-label subjects
-    near one of only 2 fixed points, learning nothing about the input fMRI
-    signal, which collapses the downstream ASD classifier).
-
-    Cached to disk (like `load_abide`) since embedding ~1000 subjects
-    through a multi-GB LLM is the single most expensive one-time step and
-    is identical across every Stage-1/Stage-2 run and every seed.
-    """
     tag = str(max_subjects) if max_subjects is not None else "full"
     cache_path = Path(data_dir) / f"text_emb_{lm_name}_{tag}.npy"
     if use_cache and cache_path.exists():
@@ -476,6 +455,10 @@ def embed_descriptors(llm, all_descs, lm_name: str, data_dir: str = "./abide_dat
             print(f"Loading cached {lm_name} text embeddings ({tag}) from {cache_path} ...")
             return arr
         print(f"Cache {cache_path} has wrong subject count, recomputing.")
+
+    if llm is None:
+        from language_models import load_backend
+        llm = load_backend(lm_name)
 
     print(f"Embedding {len(all_descs)} per-subject descriptors via {lm_name} "
          f"(cached for all future Stage-1/Stage-2 runs/seeds)...")
@@ -491,7 +474,7 @@ def embed_descriptors(llm, all_descs, lm_name: str, data_dir: str = "./abide_dat
 # Inter-site split  (Wei et al. 2026 protocol)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO):
+def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO, seed: int = SEED):
     """
     Adaptive inter-site split.
     Large sites (top `train_ratio` of subjects) -> Train + Val.
@@ -517,7 +500,7 @@ def inter_site_split(lbl_all, site_list, train_ratio: float = TRAIN_RATIO):
     if strat:
         train_idx, val_idx = train_test_split(
             train_full, test_size=0.15,
-            stratify=lbl_all[train_full], random_state=SEED)
+            stratify=lbl_all[train_full], random_state=seed)
     else:
         sz = max(2, int(len(train_full) * 0.15))
         train_idx, val_idx = train_full[sz:], train_full[:sz]
@@ -559,11 +542,17 @@ class ABIDEDataset(Dataset):
 
     def __getitem__(self, i):
         ts = torch.from_numpy(self.ts[i]).clone()
+        fc_corr = torch.from_numpy(self.fc_corr[i]).clone()
         if self.augment:
             ts = ts + torch.randn_like(ts) * 0.02
             if torch.rand(1) > 0.5: ts = ts.flip(0)
+            # Add small symmetric noise to FC matrix during training to prevent exact-value memorization
+            noise = torch.randn_like(fc_corr) * 0.01
+            noise = (noise + noise.T) / 2.0
+            fc_corr = fc_corr + noise
+            fc_corr.fill_diagonal_(0.0)
         return {"ts":       ts,
-                "fc_corr":  torch.from_numpy(self.fc_corr[i]),
+                "fc_corr":  fc_corr,
                 "fc_tan":   torch.from_numpy(self.fc_tan[i]),
                 "fc_par":   torch.from_numpy(self.fc_par[i]),
                 "label":    torch.tensor(self.labels[i]),

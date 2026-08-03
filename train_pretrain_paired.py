@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from dataset import load_abide, inter_site_split, make_loaders, embed_descriptors
 from model_fmrilm_abide import fMRITokenizer, LossWeights, AlignmentModel
-from language_models import load_backend
+from language_models import get_d_llm
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -30,14 +30,12 @@ def train(args):
      site_list, descs, site_idx, site2idx) = load_abide(args.data_dir, max_subjects=args.max_subjects)
     train_idx, val_idx, test_idx, _, _ = inter_site_split(lbl_all, site_list)
 
-    llm   = load_backend(args.lm_name)
-    D_LLM = llm.D_LLM
+    D_LLM = get_d_llm(args.lm_name)
 
     # Per-subject descriptor embeddings (Eq. 2) -- see embed_descriptors for
     # why this must NOT be a per-class centroid keyed by ground-truth label.
-    text_emb_all = embed_descriptors(llm, descs, args.lm_name, args.data_dir,
+    text_emb_all = embed_descriptors(None, descs, args.lm_name, args.data_dir,
                                      max_subjects=args.max_subjects)
-    del llm; gc.collect()
 
     train_loader, val_loader, _ = make_loaders(
         ts_all, fc_corr, fc_tan, fc_par, lbl_all, sex_all, descs, site_idx,
@@ -77,7 +75,7 @@ def train(args):
                 out  = s2(ts, fc=fc, llm_emb=c_emb)
                 loss = out["total"] / 4
             scaler.scale(loss).backward()
-            if (i + 1) % 4 == 0:
+            if (i + 1) % 4 == 0 or (i + 1) == len(train_loader):
                 scaler.unscale_(opt)
                 nn.utils.clip_grad_norm_(s2.parameters(), 1.0)
                 scaler.step(opt); scaler.update()

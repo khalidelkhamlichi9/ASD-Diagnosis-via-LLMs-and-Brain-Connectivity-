@@ -99,10 +99,13 @@ class DeepSeekBackend:
     def __init__(self):
         from transformers import AutoTokenizer, AutoModelForCausalLM
         self.tok   = AutoTokenizer.from_pretrained(self.MODEL_ID, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.MODEL_ID, trust_remote_code=True,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto")
+        kwargs = {"trust_remote_code": True}
+        if torch.cuda.is_available():
+            kwargs["torch_dtype"] = torch.float16
+            kwargs["device_map"]  = "auto"
+        else:
+            kwargs["torch_dtype"] = torch.float32
+        self.model = AutoModelForCausalLM.from_pretrained(self.MODEL_ID, **kwargs)
         if self.tok.pad_token is None:
             self.tok.pad_token = self.tok.eos_token
         print(f"[DeepSeekBackend] {self.MODEL_ID}  D={self.D_LLM}")

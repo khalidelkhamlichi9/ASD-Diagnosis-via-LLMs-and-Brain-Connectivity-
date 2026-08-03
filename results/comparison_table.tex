@@ -1,0 +1,17 @@
+\begin{table}[h]
+\centering
+\caption{Comparaison équitable sur ABIDE-I (unseen test sites).}
+\label{tab:baseline_comparison}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Method & \textbf{Acc} & \textbf{bAcc} & \textbf{AUC} & \textbf{F1} & \textbf{Worst-Site} & \textbf{Prec} & \textbf{Recall} \\
+\midrule
+NeuroLingua-Bridge (DeepSeek) $\dagger$ & $80.0\pm0.7$ & --- & $81.1\pm0.8$ & $79.9\pm0.7$ & $74.1\pm1.3$ & --- & --- \\
+NeuroLingua-Bridge (GPT-2) $\dagger$ & $76.0\pm1.1$ & --- & $76.2\pm1.2$ & $75.8\pm1.1$ & $64.3\pm1.9$ & --- & --- \\
+\midrule
+ComBat (EB) + MLP $\ddagger$ & $59.3$ & $59.1$ & $61.6$ & $59.0$ & $43.3$ & $59.0$ & $59.1$ \\
+BNT K=8 d=64 $\ddagger$ & $54.1$ & $54.4$ & $57.3$ & $54.1$ & $40.4$ & $54.4$ & $54.4$ \\
+\bottomrule
+\end{tabular}
+\footnotetext{$\dagger$ Résultats du papier (5 seeds). $\ddagger$ Même protocole expérimental exact (split inter-site, seed, métriques).}
+\end{table}

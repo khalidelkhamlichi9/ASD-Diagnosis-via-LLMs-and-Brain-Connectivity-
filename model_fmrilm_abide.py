@@ -43,7 +43,7 @@ D_VQ     = 128   # VQ codebook dim
 K_VQ     = 8192  # codebook size
 K_SITES  = 17    # ABIDE-I acquisition sites (site-adversarial GRL, Eq. 3)
 N_CLASSES = 2    # ASD / Control (dynamic prototypes, Eq. 4-5)
-GAMMA_PROTO = 0.10  # weight of L_proto in L_Stage-1 (paper: gamma = 0.10)
+GAMMA_PROTO = 0.50  # weight of L_proto in L_Stage-1 (increased to 0.50 for stronger prototype separation)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -123,7 +123,7 @@ class DynamicPrototypes(nn.Module):
                  k_sites: int = K_SITES, eta: float = 0.9, beta: float = 0.5):
         super().__init__()
         self.register_buffer("mu", torch.zeros(n_classes, dim))
-        self.register_buffer("initialized", torch.zeros(1))
+        self.register_buffer("initialized", torch.zeros(n_classes))
         self.n_classes, self.k_sites = n_classes, k_sites
         self.eta, self.beta = eta, beta
 
@@ -132,6 +132,7 @@ class DynamicPrototypes(nn.Module):
         """EMA update of Eq. (5). Call once per training step with detached
         z_bar (prototypes must not receive gradient from the encoder)."""
         new = self.mu.clone()
+        updated_mask = torch.zeros(self.n_classes, dtype=torch.bool, device=z_bar.device)
         for c in range(self.n_classes):
             per_site_means = []
             for k in range(self.k_sites):
@@ -140,11 +141,19 @@ class DynamicPrototypes(nn.Module):
                     per_site_means.append(z_bar[mask].mean(0))
             if per_site_means:
                 new[c] = torch.stack(per_site_means).mean(0)  # site-balanced class mean
-        if self.initialized.item() == 0:
-            self.mu.copy_(new)
-            self.initialized.fill_(1.)
-        else:
-            self.mu.mul_(self.eta).add_(new, alpha=1 - self.eta)
+                updated_mask[c] = True
+
+        for c in range(self.n_classes):
+            if updated_mask[c]:
+                is_init = (self.initialized[c].item() if self.initialized.numel() > 1 else self.initialized.item())
+                if is_init == 0:
+                    self.mu[c].copy_(new[c])
+                    if self.initialized.numel() > 1:
+                        self.initialized[c].fill_(1.)
+                    else:
+                        self.initialized.fill_(1.)
+                else:
+                    self.mu[c].mul_(self.eta).add_(new[c], alpha=1 - self.eta)
 
     def loss(self, z_bar: torch.Tensor, y: torch.Tensor, margin: float = 1.0) -> torch.Tensor:
         """
@@ -559,7 +568,7 @@ class ASDClassifier(nn.Module):
     shared trunk.
     """
     def __init__(self, align_model: AlignmentModel, d_llm: int = 1024,
-                 hidden: int = 512, n_rois: int = 200, fc_dim: int = 128,
+                 hidden: int = 512, n_rois: int = 200, fc_dim: int = 32,
                  finetune_encoder: bool = False):
         super().__init__()
         self.align = align_model
@@ -584,7 +593,7 @@ class ASDClassifier(nn.Module):
         iu = torch.triu_indices(n_rois, n_rois, offset=1)
         self.register_buffer("_iu_row", iu[0], persistent=False)
         self.register_buffer("_iu_col", iu[1], persistent=False)
-        self.fc_in_drop = nn.Dropout(0.5)                     # connection dropout
+        self.fc_in_drop = nn.Dropout(0.7)
         self.fc_feat = nn.Sequential(
             nn.Linear(n_pairs, fc_dim), nn.LayerNorm(fc_dim), nn.GELU(), nn.Dropout(0.5))
 
@@ -592,7 +601,7 @@ class ASDClassifier(nn.Module):
         fused_dim = hidden + fc_dim
         self.trunk = nn.Sequential(
             nn.Linear(fused_dim, hidden // 2), nn.LayerNorm(hidden // 2),
-            nn.GELU(), nn.Dropout(0.4))
+            nn.GELU(), nn.Dropout(0.40))
         self.asd_head = nn.Linear(hidden // 2, 2)
         self.sex_head = nn.Linear(hidden // 2, 2)
 
@@ -638,7 +647,7 @@ class GroupDRO:
     which lets K_SITES be checked against a running best worst-site metric
     on a held-out validation split rather than the training batch alone.
     """
-    def __init__(self, k_sites: int = K_SITES, step_size: float = 0.01):
+    def __init__(self, k_sites: int = K_SITES, step_size: float = 0.05):
         self.q = torch.ones(k_sites) / k_sites
         self.step_size = step_size
         self.k_sites = k_sites

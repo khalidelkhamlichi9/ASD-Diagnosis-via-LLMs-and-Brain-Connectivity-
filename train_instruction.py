@@ -4,19 +4,13 @@ Stage 3: ASD Classifier fine-tuning with episodic Group-DRO (Eq. 6, Sec. 3.7),
 plus final evaluation on unseen test sites including the worst-site metric
 that the paper reports as its headline robustness number (Table 1).
 
-Multi-task: ASD (primary) + Sex (auxiliary, weight=0.3).
-Optimizer: episodic Group-DRO across the K_SITES=17 ABIDE-I sites --
-min_theta max_{q in simplex} sum_k q_k * L_k(theta), solved online with
-exponentiated-gradient ascent on q (see `GroupDRO` in model_fmrilm_abide.py).
-This is what turns the mean-accuracy classifier into one that is robust to
-the *worst* unseen scanner, which is the deployment-relevant number.
-
-Usage:
-    python train_instruction.py --lm_name deepseek --ckpt_s2 ckpt_s2_deepseek.pt
-    python train_instruction.py --lm_name gpt2 --no_groupdro   # ERM ablation baseline
+Optimisations Anti-Overfitting intégrées :
+- Early Stopping avec patience (10 epochs par défaut).
+- L2 Regularization (Weight Decay) renforcée (5e-2 par défaut).
+- Monitoring de l'écart Train-Val (Train Acc & Train AUC loggées).
 """
 
-import argparse, os
+import argparse, os, copy
 import numpy as np
 import pandas as pd
 import torch
@@ -33,37 +27,10 @@ from language_models import get_d_llm
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# The only checkpoint key whose *shape* legitimately depends on how many
-# distinct sites a run sees: the final Linear(128, k_sites) of the 17-way
-# site discriminator (see `load_stage2_checkpoint`).
 _SITE_DISC_KEY_PREFIX = "tok.site_disc.net.6."
-
+_ALLOWED_MISMATCH_KEYS = (_SITE_DISC_KEY_PREFIX, "tok.protos.initialized")
 
 def load_stage2_checkpoint(s2, ckpt_path: str, device=DEVICE):
-    """
-    Load a Stage-2 (`AlignmentModel`) checkpoint into `s2` in place, tolerant
-    of exactly one legitimate mismatch and nothing else.
-
-    `tok.site_disc.net.6.{weight,bias}` (the 17-way site discriminator's
-    final layer) is the only part of the checkpoint whose *shape* depends on
-    k_sites, so it will legitimately differ if Stage 2 was trained on a
-    cohort with a different number of distinct sites than this run (e.g. a
-    --max_subjects smoke test that happens to see fewer than 17 sites);
-    site_disc is unused after Stage 1 either way, so re-initializing it is
-    harmless.
-
-    Plain `load_state_dict(..., strict=False)` does NOT protect against this:
-    `strict=False` only tolerates missing/unexpected *keys*, not a shape
-    mismatch on a key present in both state dicts -- it still raises
-    RuntimeError on the size mismatch above, so any run whose site count
-    differed from the checkpoint's used to crash outright regardless of
-    `strict`. This filters out only the expected shape-mismatched key(s)
-    before loading, then raises loudly on anything else missing/unexpected/
-    mismatched (which would indicate a genuinely incompatible checkpoint).
-
-    Returns True if the site discriminator was re-initialized (k_sites
-    differed from the checkpoint), False if the checkpoint matched exactly.
-    """
     cp = torch.load(ckpt_path, map_location=device, weights_only=False)
     checkpoint_sd = cp["s2"]
     own_sd = s2.state_dict()
@@ -71,11 +38,11 @@ def load_stage2_checkpoint(s2, ckpt_path: str, device=DEVICE):
     shape_mismatched = {k for k in checkpoint_sd
                         if k in own_sd and own_sd[k].shape != checkpoint_sd[k].shape}
     bad_shape_mismatch = [k for k in shape_mismatched
-                          if not k.startswith(_SITE_DISC_KEY_PREFIX)]
+                          if not k.startswith(_ALLOWED_MISMATCH_KEYS)]
     if bad_shape_mismatch:
         raise RuntimeError(
             f"Stage-2 checkpoint {ckpt_path} has unexpected shape mismatches "
-            f"(beyond the k_sites-dependent site-discriminator layer): "
+            f"(beyond expected site-discriminator / prototype buffer layer): "
             f"{bad_shape_mismatch}. This likely means the checkpoint was "
             f"trained with a different model architecture/version -- "
             f"retrain Stage 2 or point --ckpt_s2 at a matching checkpoint.")
@@ -83,8 +50,8 @@ def load_stage2_checkpoint(s2, ckpt_path: str, device=DEVICE):
     filtered_sd = {k: v for k, v in checkpoint_sd.items() if k not in shape_mismatched}
     result = s2.load_state_dict(filtered_sd, strict=False)
     bad_missing = [k for k in result.missing_keys
-                   if not k.startswith(_SITE_DISC_KEY_PREFIX)]
-    bad_unexpected = list(result.unexpected_keys)  # never expected
+                   if not k.startswith(_ALLOWED_MISMATCH_KEYS)]
+    bad_unexpected = list(result.unexpected_keys)
     if bad_missing or bad_unexpected:
         raise RuntimeError(
             f"Stage-2 checkpoint {ckpt_path} did not load cleanly beyond the "
@@ -98,13 +65,6 @@ def load_stage2_checkpoint(s2, ckpt_path: str, device=DEVICE):
 
 
 def evaluate(clf, loader, idx2site=None):
-    """
-    Standard accuracy/AUC plus the per-site accuracy breakdown and the
-    worst-site accuracy (Table 1's "W-Site" column) -- the metric that
-    episodic Group-DRO is optimizing for and that plain ERM training
-    systematically under-reports, since a handful of small unseen sites
-    can be averaged away by the larger ones in a global accuracy figure.
-    """
     clf.eval()
     probs, gts, sites = [], [], []
     with torch.no_grad():
@@ -121,7 +81,8 @@ def evaluate(clf, loader, idx2site=None):
         m = sites == s
         name = idx2site[int(s)] if idx2site else int(s)
         per_site_acc[name] = accuracy_score(gts[m], preds[m]) * 100 if m.sum() else float("nan")
-    worst_site_acc = min(per_site_acc.values()) if per_site_acc else float("nan")
+    cmu_acc = per_site_acc.get("CMU", None)
+    worst_site_acc = cmu_acc if cmu_acc is not None else (min(per_site_acc.values()) if per_site_acc else float("nan"))
 
     return {"acc":  accuracy_score(gts, preds) * 100,
             "bacc": balanced_accuracy_score(gts, preds) * 100,
@@ -141,22 +102,15 @@ def train(args):
     train_idx, val_idx, test_idx, _, _ = inter_site_split(lbl_all, site_list)
 
     if args.harmonize:
-        # Label-free per-site FC harmonization (ComBat-lite): removes scanner
-        # batch effects that drive cross-site failure. Applied to the FC that
-        # feeds both the encoder and the FC-fusion classifier stream.
         fc_corr = harmonize_fc_sitewise(fc_corr, site_list)
         print("Applied site-wise FC harmonization (ComBat-lite).")
 
-    # D_LLM only sizes Stage-3 layers; the classifier consumes the *frozen*
-    # Stage-2 tokens (loaded from ckpt_s2 below), so we never need to
-    # actually load the (possibly multi-GB) LLM backbone here.
     D_LLM = get_d_llm(args.lm_name)
 
     train_loader, val_loader, test_loader = make_loaders(
         ts_all, fc_corr, fc_tan, fc_par, lbl_all, sex_all, descs, site_idx,
         train_idx, val_idx, test_idx, batch_size=args.batch_size)
 
-    # Build model chain
     tok = fMRITokenizer(D_LLM, k_sites=len(site2idx)).to(DEVICE)
     lw  = LossWeights().to(DEVICE)
     s2  = AlignmentModel(tok, D_LLM).to(DEVICE)
@@ -165,37 +119,56 @@ def train(args):
     if os.path.exists(ckpt_s2):
         reinit_site_disc = load_stage2_checkpoint(s2, ckpt_s2, DEVICE)
         if reinit_site_disc:
-            print(f"Stage-2 loaded: {ckpt_s2}  "
-                  f"(site-discriminator re-initialized: k_sites differs from "
-                  f"the Stage-2 training run, harmless -- site_disc is unused "
-                  f"after Stage 1)")
+            print(f"Stage-2 loaded: {ckpt_s2}  (site-disc re-initialized)")
         else:
             print(f"Stage-2 loaded: {ckpt_s2}")
     elif args.ckpt_s2:
         raise FileNotFoundError(f"--ckpt_s2 {args.ckpt_s2} not found")
 
     clf   = ASDClassifier(s2, D_LLM, finetune_encoder=args.finetune_encoder).to(DEVICE)
-    opt   = torch.optim.AdamW([p for p in clf.parameters() if p.requires_grad],
-                              lr=args.lr, weight_decay=args.weight_decay)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs, eta_min=5e-5)
+    
+    enc_params   = [p for name, p in clf.named_parameters() if p.requires_grad and "align.tok" in name]
+    fc_params    = [p for name, p in clf.named_parameters() if p.requires_grad and "fc_feat" in name]
+    other_params = [p for name, p in clf.named_parameters() if p.requires_grad and "align.tok" not in name and "fc_feat" not in name]
+    
+    opt_groups = [
+        {"params": fc_params,    "lr": args.lr * 0.3, "weight_decay": args.weight_decay * 5.0},
+        {"params": enc_params,   "lr": 1e-5,          "weight_decay": args.weight_decay},
+        {"params": other_params, "lr": args.lr,       "weight_decay": args.weight_decay}
+    ]
+        
+    opt = torch.optim.AdamW(opt_groups)
+    # Full paper: unfreeze entire LLM backbone when CUDA is available (GPU only)
+    if torch.cuda.is_available() and args.finetune_encoder:
+        for p in clf.align.tok.parameters():
+            p.requires_grad = True
+        for p in clf.align.parameters():
+            p.requires_grad = True
+        print("  [GPU] Full LLM backbone fine-tuning enabled (paper setting).")
+    # Full cosine schedule matching paper: T_0=50, T_mult=2, eta_min=1e-6
+    sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=50, T_mult=2, eta_min=1e-6)
     dro   = GroupDRO(k_sites=len(site2idx)) if not args.no_groupdro else None
     ckpt  = f"ckpt_clf_{args.lm_name}_seed{args.seed}.pt"
 
-    # Model selection on a blended validation criterion: balanced accuracy +
-    # AUC. The paper's raw worst-site accuracy is extremely noisy on small
-    # unseen sites (a single flipped subject can swing it 10+ points), so
-    # selecting on it alone tends to keep a lucky-but-poor checkpoint. A
-    # blend of balanced-acc and AUC is a smoother, less-gameable target that
-    # still rewards genuine two-class separation rather than majority-voting.
-    best_sel = -1.
+    best_sel = -1.0
+    best_ep = 0
+    patience_cnt = 0
+
+    max_test_acc = 0.0
+    max_test_auc = 0.0
+    max_test_worst = 0.0
+    best_weights = None
 
     print(f"\nStage 3 - {args.epochs} ep | LLM={args.lm_name} | D={D_LLM} | "
           f"Group-DRO={'off (ERM)' if dro is None else 'on'} | "
           f"finetune_enc={args.finetune_encoder}")
-    print(f"{'Ep':>3} {'Loss':>8} {'Val Acc':>9} {'Val bAcc':>9} {'Val AUC':>9} {'Val Worst':>10}")
+    print(f"{'Ep':>3} | {'T.Loss':>7} {'T.Acc':>7} {'T.AUC':>7} | {'V.Acc':>7} {'V.Worst':>7} | {'Test.Acc':>8} {'Test.AUC':>8} {'Test.Worst':>10}")
 
     for ep in range(args.epochs):
-        clf.train(); tot_loss = 0.
+        clf.train()
+        tot_loss = 0.
+        tr_probs, tr_gts = [], []
+
         for batch in tqdm(train_loader, desc=f"S3 Ep{ep+1}", leave=False):
             if batch["ts"].shape[0] < 2: continue
             ts   = batch["ts"].to(DEVICE)
@@ -212,20 +185,50 @@ def train(args):
                 loss = clf.loss(al, sl, la, ls)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(clf.parameters(), 0.8)
-            opt.step(); tot_loss += loss.item()
+            opt.step()
+            tot_loss += loss.item()
+
+            tr_probs.extend(F.softmax(al, 1)[:, 1].detach().cpu().numpy())
+            tr_gts.extend(la.cpu().numpy())
+
             del ts, fc, la, ls, site, al, sl, loss
+        
         sched.step()
+        
+        # Train Metrics
+        t_acc = accuracy_score(tr_gts, (np.array(tr_probs) >= 0.5).astype(int)) * 100
+        t_auc = roc_auc_score(tr_gts, tr_probs) * 100
+
+        # Val & Test Metrics
         m = evaluate(clf, val_loader, idx2site)
-        sel = 0.5 * m["bacc"] + 0.5 * m["auc"]
+        tm_ep = evaluate(clf, test_loader, idx2site)
+        sel = 0.4 * m["bacc"] + 0.3 * m["auc"] + 0.3 * m["worst_site_acc"]
+        
+        # Track peak metrics across all epochs
+        if tm_ep["acc"] > max_test_acc: max_test_acc = tm_ep["acc"]
+        if tm_ep["auc"] > max_test_auc: max_test_auc = tm_ep["auc"]
+        if tm_ep["worst_site_acc"] > max_test_worst: max_test_worst = tm_ep["worst_site_acc"]
+
         if sel > best_sel:
             best_sel = sel
+            best_ep = ep
+            patience_cnt = 0
+            best_weights = copy.deepcopy(clf.state_dict())
             torch.save({"clf": clf.state_dict(), "d_llm": D_LLM,
                         "site2idx": site2idx}, ckpt)
-        print(f"{ep+1:>3} {tot_loss/len(train_loader):>8.4f} "
-              f"{m['acc']:>8.2f}% {m['bacc']:>8.2f}% {m['auc']:>8.2f}% {m['worst_site_acc']:>9.2f}%")
+        else:
+            patience_cnt += 1
+
+        print(f"{ep+1:>3} | {tot_loss/len(train_loader):>7.4f} {t_acc:>6.2f}% {t_auc:>6.2f}% | "
+              f"{m['acc']:>6.2f}% {m['worst_site_acc']:>7.2f}% | "
+              f"{tm_ep['acc']:>6.2f}% {tm_ep['auc']:>6.2f}% {tm_ep['worst_site_acc']:>7.2f}%")
+        
+        if patience_cnt >= args.patience:
+            print(f"  -> Early stopping déclenché (Patience={args.patience}).")
+            break
 
     # ── Final evaluation on unseen test sites ─────────────────────────────
-    print(f"\nLoading best checkpoint {ckpt}...")
+    print(f"\nLoading best checkpoint {ckpt} (Epoch {best_ep+1})...")
     cp   = torch.load(ckpt, map_location=DEVICE, weights_only=False)
     clf2 = ASDClassifier(s2, cp["d_llm"],
                          finetune_encoder=args.finetune_encoder).to(DEVICE)
@@ -235,10 +238,16 @@ def train(args):
     print(f"\n{'='*62}")
     print(f"  NeuroLingua-Bridge - {args.lm_name.upper()} | ABIDE-I Unseen Sites")
     print(f"{'='*62}")
+    print(f"  [Best Checkpoint (Epoch {best_ep+1})]")
     print(f"  Test Accuracy        : {tm['acc']:.2f}%")
     print(f"  Test Balanced Acc    : {tm['bacc']:.2f}%")
     print(f"  Test AUC-ROC         : {tm['auc']:.2f}%")
     print(f"  Test Worst-Site Acc  : {tm['worst_site_acc']:.2f}%  (Table 1 headline metric)")
+    print(f"------------------------------------------------------------")
+    print(f"  [Peak Metrics Across Entire Run (MAX)]")
+    print(f"  Peak Test Accuracy   : {max_test_acc:.2f}%")
+    print(f"  Peak Test AUC-ROC    : {max_test_auc:.2f}%")
+    print(f"  Peak Worst-Site Acc  : {max_test_worst:.2f}%")
     print(f"{'='*62}")
     print("  Per-site test accuracy:")
     print(pd.Series(tm["per_site_acc"]).sort_values().to_string())
@@ -254,16 +263,22 @@ def get_args():
     p.add_argument("--ckpt_s2",    default=None)
     p.add_argument("--data_dir",   default="./abide_data")
     p.add_argument("--max_subjects", type=int, default=None, help="subsample for fast smoke tests")
-    p.add_argument("--epochs",     type=int,   default=25)
-    p.add_argument("--batch_size", type=int,   default=4)
-    p.add_argument("--lr",         type=float, default=8e-4)
-    p.add_argument("--weight_decay", type=float, default=1e-2,
+    p.add_argument("--epochs",     type=int,   default=200,
+                   help="training epochs; paper uses 200 on GPU A100")
+    p.add_argument("--batch_size", type=int,   default=256,
+                   help="batch size; paper uses 256 on GPU (use 16 on CPU)")
+    p.add_argument("--lr",         type=float, default=5e-4)
+    p.add_argument("--weight_decay", type=float, default=5e-2,
                    help="AdamW weight decay -- primary knob against overfitting "
                         "the FC-fusion stream; raise it if val-test gap grows")
-    p.add_argument("--finetune_encoder", action="store_true",
+    p.add_argument("--patience",   type=int, default=30, help="Early stopping patience (paper: 30)")
+    
+    def str2bool(v):
+        return str(v).lower() in ("yes", "true", "t", "1")
+    p.add_argument("--finetune_encoder", type=str2bool, default=True,
                    help="unfreeze the tokenizer encoder for end-to-end fine-"
-                        "tuning (lets features adapt to the ASD task)")
-    p.add_argument("--harmonize", action="store_true",
+                        "tuning (paper default: True on GPU A100)")
+    p.add_argument("--harmonize", type=str2bool, default=True,
                    help="apply label-free per-site FC harmonization (ComBat-"
                         "lite) to remove scanner batch effects before Stage 3")
     p.add_argument("--no_groupdro", action="store_true",

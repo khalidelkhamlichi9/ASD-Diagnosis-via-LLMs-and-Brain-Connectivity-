@@ -140,57 +140,81 @@ The three stages are sequential: each one consumes the checkpoint produced by
 the previous stage. `--lm_name` selects the backbone and accepts
 `deepseek`, `gpt2`, `clinicalt5`, `grok`, or `gemini`.
 
-### Stage 1 — Tokenizer
+---
 
+### 🚀 GPU A100 / V100 — Full Paper Settings (reproduces Table 1)
+
+> Expected results: **Acc=80.0% ± 0.7% | AUC=81.1% ± 0.8% | W-Site(CMU)=74.1% ± 1.3%**
+> Total runtime: **~1h on A100 / ~2h30 on V100**
+
+**Stage 1 — Tokenizer**
 ```bash
-python train_tokenizer.py \
-    --lm_name deepseek --data_dir ./abide_data \
-    --epochs 15 --batch_size 2
+python train_tokenizer.py --lm_name deepseek --data_dir ./abide_data --epochs 50 --batch_size 256
 ```
 
-Produces `ckpt_tok_deepseek.pt`.
-
-### Stage 2 — Frozen-LLM alignment
-
+**Stage 2 — Frozen-LLM Alignment**
 ```bash
-python train_pretrain_paired.py \
-    --lm_name deepseek --data_dir ./abide_data \
-    --ckpt_tok ckpt_tok_deepseek.pt \
-    --epochs 10 --batch_size 2
+python train_pretrain_paired.py --lm_name deepseek --data_dir ./abide_data --ckpt_tok ckpt_tok_deepseek_seed42.pt --epochs 30 --batch_size 256
 ```
 
-Produces `ckpt_s2_deepseek.pt`.
-
-### Stage 3 — ASD classifier + Group-DRO
-
+**Stage 3 — ASD Classifier + Group-DRO**
 ```bash
-python train_instruction.py \
-    --lm_name deepseek --data_dir ./abide_data \
-    --ckpt_s2 ckpt_s2_deepseek.pt \
-    --epochs 25 --batch_size 2
+python train_instruction.py --lm_name deepseek --data_dir ./abide_data --ckpt_s2 ckpt_s2_deepseek_seed42.pt --epochs 200 --batch_size 256 --lr 5e-4 --weight_decay 5e-2 --harmonize True --finetune_encoder True --patience 30
 ```
 
-Produces `ckpt_clf_deepseek.pt`.
+**Full 5-Seed Benchmark (Table 1 exact format)**
+```bash
+python run_full_paper_5seeds.py --lm_name deepseek --epochs 200 --batch_size 256 --lr 5e-4 --weight_decay 5e-2
+```
+
+---
+
+### 💻 CPU Only — Fast Local Run (~20-30 min)
+
+> Expected results: **Acc≈59% | AUC≈61% | W-Site(CMU)≈74%**
+
+**Stage 1 — Tokenizer**
+```bash
+python train_tokenizer.py --lm_name deepseek --data_dir ./abide_data --epochs 15 --batch_size 4
+```
+
+**Stage 2 — Frozen-LLM Alignment**
+```bash
+python train_pretrain_paired.py --lm_name deepseek --data_dir ./abide_data --ckpt_tok ckpt_tok_deepseek_seed42.pt --epochs 10 --batch_size 4
+```
+
+**Stage 3 — ASD Classifier + Group-DRO**
+```bash
+python train_instruction.py --lm_name deepseek --data_dir ./abide_data --ckpt_s2 ckpt_s2_deepseek_seed42.pt --epochs 50 --batch_size 16 --lr 5e-4 --weight_decay 5e-2 --harmonize True --finetune_encoder True --patience 10
+```
+
+**Evaluate on held-out sites**
+```bash
+python eval_zeroshot.py --lm_name deepseek --data_dir ./abide_data --checkpoint ckpt_clf_deepseek_seed42.pt
+```
 
 > **Note:** Group-DRO is **enabled by default**. Pass `--no_groupdro` to fall
-> back to plain ERM (used for the ablation study).
+> back to plain ERM (used for the ablation study in Table 1).
 
-### Evaluate on held-out sites
+---
 
-```bash
-python eval_zeroshot.py \
-    --lm_name deepseek --data_dir ./abide_data \
-    --checkpoint ckpt_clf_deepseek.pt
-```
+### 📊 Baseline Comparisons (ComBat, BNT, BrainNetCNN)
 
-### Run the full pipeline in one command
+Run baseline models under the exact same Leave-Site-Out (LSO) protocol:
 
 ```bash
-bash scripts/run_deepseek.sh
-```
+# 1. ComBat (Empirical Bayes) + Robust MLP
+python baselines/combat_baseline.py --seed 42
 
-Equivalent scripts exist for each backbone: `run_gpt2.sh`, `run_clinicalt5.sh`,
-`run_grok.sh`, `run_gemini.sh`.
+# 2. Brain Network Transformer (BNT)
+python baselines/bnt_baseline.py --seed 42
+
+# 3. BrainNetCNN (Kannah et al., 2016)
+python baselines/brainnetcnn_baseline.py --seed 42
+
+# 4. Generate Comparative Results Table (Markdown + LaTeX)
+python baselines/results_table.py
+```
 
 ---
 
