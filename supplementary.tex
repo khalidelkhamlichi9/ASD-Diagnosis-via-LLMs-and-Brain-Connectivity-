@@ -1,0 +1,301 @@
+% NeuroLingua-Bridge -- Supplementary Material
+% ELAMI 2026 (Springer LNCS, runningheads)
+\documentclass[runningheads]{llncs}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{url}
+\renewcommand\UrlFont{\color{blue}\rmfamily}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\usepackage{caption}
+\captionsetup{font=small,skip=4pt}
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\newcommand{\Lquant}{\mathcal{L}_{\mathrm{quant}}}
+\newcommand{\Lclip}{\mathcal{L}_{\mathrm{CLIP}}}
+\newcommand{\Lgrl}{\mathcal{L}_{\mathrm{site}}}
+\newcommand{\Lproto}{\mathcal{L}_{\mathrm{proto}}}
+\newcommand{\Ltok}{\mathcal{L}_{\mathrm{tok}}}
+\newcommand{\method}{\textsc{NeuroLingua-Bridge}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\KL}{KL}
+% -- theorem-like environments (required by amsthm) --
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{lemma}[proposition]{Lemma}
+\newtheorem{corollary}[proposition]{Corollary}
+\newtheorem{definition}[proposition]{Definition}
+\begin{document}
+\title{Supplementary Material for: \method{}}
+\titlerunning{Supplementary: NeuroLingua-Bridge}
+\author{Khalid El Khamlichi \and Fatima Ez-Zahraa Bazay \and Ahmed Drissi El Maliani}
+\authorrunning{K. El Khamlichi et al.}
+\institute{Faculty of Sciences, Mohammed V University, Rabat, Morocco\\
+\email{khalid\_elkhamlichi@um5.ac.ma}}
+\maketitle
+This document collects the formal proofs of the four mathematical results used in the main paper (Appendix~\ref{app:proofs}), the full experimental configuration including per-fold subject lists and preprocessing statistics (Appendix~\ref{app:setup}), an expanded related-work discussion (Appendix~\ref{app:related}), and additional quantitative analyses (Appendices~\ref{app:ablation}--\ref{app:extra}). Throughout, $x$ denotes an fMRI--text input, $s\in\{1,\dots,K\}$ its acquisition site with $K{=}17$, $c\in\{1,\dots,C\}$ its diagnostic label with $C{=}2$, and $\bar z = E_\theta(x)\in\mathbb{R}^{C}$ the pooled latent code produced by the encoder $E_\theta$. All expectations are over the empirical training distribution unless stated otherwise.
+%
+\section{Formal Proofs}
+\label{app:proofs}
+We prove, in order: (S1) the site-invariance guarantee of the multi-class GRL; (S2) the exactness of the worst-site reformulation of the Group-DRO objective together with the convergence of the exponentiated-gradient update; (S3) the unbiasedness of the site-balanced prototype EMA and its contraction to the balanced class mean; and (S4) the well-posedness of the learnable softmax loss weights. Result~S1 corresponds to Prop.~S1 of the main paper; S2--S4 make precise the claims accompanying Eqs.~(6), (5) and the Stage-1 objective.
+\subsection{Preliminaries}
+We first record two standard facts used repeatedly. For a categorical target $s$ with $K$ classes and any predictor $q(\cdot\mid\bar z)\in\Delta^{K-1}$, the population multinomial cross-entropy $\mathrm{CE}(q) = -\,\mathbb{E}_{(\bar z,s)}\!\big[\log q(s\mid\bar z)\big]$ decomposes as
+\begin{equation}
+\mathrm{CE}(q) = H(s\mid\bar z) + \mathbb{E}_{\bar z}\!\big[\KL\!\big(p(\cdot\mid\bar z)\,\|\,q(\cdot\mid\bar z)\big)\big].
+\label{eq:ce-decomp}
+\end{equation}
+Since the KL term is non-negative and vanishes iff $q=p$ a.e., $\mathrm{CE}$ is minimized exactly at the Bayes-optimal posterior $q^\star=p(\cdot\mid\bar z)$. Second, the mutual information satisfies $I(\bar z;s)=H(s)-H(s\mid\bar z)\ge 0$, with equality iff $\bar z\perp s$.
+\subsection{Proposition S1: Site Invariance at Saddle Points}
+\begin{proposition}[Multi-class site invariance]\label{prop:siteinv}
+Let the encoder $E_\theta$ and the unconstrained site discriminator $D_\psi:\mathbb{R}^{C}\!\to\!\Delta^{K-1}$ be coupled through the gradient reversal layer $\mathcal{R}_\lambda$~\cite{ganin2016dann} ($\lambda>0$), and consider the minimax problem $\min_{\theta}\max_{\psi}\,\mathcal{L}_{\mathrm{task}}(\theta)-\lambda\,\Lgrl(\theta,\psi)$, where $\Lgrl(\theta,\psi)= -\frac{1}{B}\sum_{i=1}^{B}\sum_{k=1}^{K}\mathbf{1}[s_i{=}k]\log\big[D_\psi(\bar z_i)\big]_k$. Assume $D_\psi$ has sufficient capacity and that a saddle point $(\theta^\star,\psi^\star)$ exists. Then $I(\bar z;s)=0$, i.e.\ $\bar z=E_{\theta^\star}(x)\perp s$.
+\end{proposition}
+\begin{proof}
+Fix $\theta$. By~\eqref{eq:ce-decomp}, the inner maximizer over $\psi$ is the Bayes posterior $D_{\psi^\star(\theta)}=p(s\mid\bar z)$, attaining $\max_{\psi}(-\Lgrl)=-H_\theta(s\mid\bar z)$. The encoder's value function becomes $V(\theta)=\mathcal{L}_{\mathrm{task}}(\theta)+\lambda\,H_\theta(s\mid\bar z)$. In the regime where $\mathcal{L}_{\mathrm{task}}$ does not require site information, minimizing $V$ maximizes $H_\theta(s\mid\bar z)$. Since $H_\theta(s\mid\bar z)\le H(s)$ with equality iff $\bar z\perp s$, the optimal encoder achieves $H_{\theta^\star}(s\mid\bar z)=H(s)$, hence $I(\bar z;s)=H(s)-H_{\theta^\star}(s\mid\bar z)=0$. The argument holds for any finite $K$, extending~\cite{ganin2016dann} from $K{=}2$ to $K{=}17$.
+\end{proof}
+\begin{corollary}[No linear site predictor]\label{cor:linear}
+At the saddle point, no measurable function of $\bar z$ predicts $s$ better than the site prior $p(s)$. This is the population counterpart of the empirical site-cluster collapse reported in Fig.~2 of the main paper.
+\end{corollary}
+\paragraph{Remark (practical caveats).}
+Proposition~\ref{prop:siteinv} concerns population saddle points with an unconstrained adversary. In practice: (i)~$D_\psi$ is a finite 2-layer MLP; (ii)~alternating SGD converges to an approximate saddle point; and (iii)~small sites introduce finite-sample entropy bias. We report the residual site information empirically (Fig.~2, main paper).
+\subsection{Proposition S2: Exactness and Convergence of Group-DRO}
+\begin{proposition}[Worst-site reformulation]\label{prop:dro-exact}
+For per-site risks $\mathcal{L}_k(\theta)\ge 0$,
+\begin{equation}
+\max_{q\in\Delta^{K-1}}\;\sum_{k=1}^{K} q_k\,\mathcal{L}_k(\theta) \;=\; \max_{k\in\{1,\dots,K\}} \mathcal{L}_k(\theta),
+\label{eq:dro-exact}
+\end{equation}
+and the maximizing $q$ places all mass on the worst site $k^\star\in\argmax_k \mathcal{L}_k(\theta)$.
+\end{proposition}
+\begin{proof}
+The map $q\mapsto\sum_k q_k\mathcal{L}_k(\theta)$ is linear on the compact convex simplex $\Delta^{K-1}$, so its maximum is attained at a vertex $e_k$. Among vertices, $\sum_j (e_k)_j\mathcal{L}_j(\theta)=\mathcal{L}_k(\theta)$ is largest at $k=k^\star$, giving~\eqref{eq:dro-exact}.
+\end{proof}
+\begin{lemma}[EG as entropic mirror ascent]\label{lem:eg}
+The multiplicative update $q_k \leftarrow q_k\exp(\nu\,\mathcal{L}_k)$ followed by renormalization solves $q^{+} = \argmax_{q\in\Delta^{K-1}}\big\{\nu\langle q,\mathcal{L}(\theta)\rangle - \KL(q\,\|\,q^{\mathrm{old}})\big\}$.
+\end{lemma}
+\begin{proof}
+Setting the derivative of the Lagrangian to zero gives $q_k\propto q^{\mathrm{old}}_k\exp(\nu\mathcal{L}_k)$, recovering the update.
+\end{proof}
+\begin{corollary}[Entropic-smoothing bound]\label{cor:eg-conv}
+The EG surrogate satisfies $0 \le \max_k\mathcal{L}_k(\theta) - \frac{1}{\nu}\log\sum_k\exp(\nu\mathcal{L}_k(\theta)) \le \frac{\log K}{\nu}$. As $\nu\to\infty$ the surrogate tends to the exact worst-site risk; as $\nu\to 0$ it recovers the uniform ERM average.
+\end{corollary}
+\subsection{Proposition S3: Unbiasedness of the Site-Balanced Prototype EMA}
+Let $m_{c,k}=\frac{1}{|\mathcal{I}_{c,k}|}\sum_{i\in\mathcal{I}_{c,k}}\bar z_i$ be the per-site class mean and $\bar m_c=\frac{1}{K}\sum_{k=1}^{K} m_{c,k}$ the site-balanced target.
+\begin{proposition}[Balanced target and no site bias]\label{prop:proto}
+Assume each $m_{c,k}$ is unbiased for the centroid $\nu_{c,k}=\mathbb{E}[\bar z\mid c,s{=}k]$. Then: (i)~$\bar m_c$ is unbiased for the site-uniform centroid $\bar\nu_c=\frac1K\sum_k\nu_{c,k}$; (ii)~the naive pooled mean is biased toward large sites; (iii)~$\mathbb{E}[\mu_c^{(t)}]\to\bar\nu_c$ geometrically at rate $\eta$.
+\end{proposition}
+\begin{proof}
+(i) By linearity: $\mathbb{E}[\bar m_c]=\frac1K\sum_k\nu_{c,k}=\bar\nu_c$. (ii) The pooled mean weights by $\pi_{c,k}\propto|\mathcal{I}_{c,k}|$, which concentrates on the largest sites. (iii) Unrolling the EMA: $\mathbb{E}[\mu_c^{(t)}]=\eta^t\mu_c^{(0)}+(1-\eta^t)\bar\nu_c\to\bar\nu_c$.
+\end{proof}
+\subsection{Proposition S4: Well-Posedness of Learnable Loss Weights}
+The weights are $(w_1,w_2,w_3)=\mathrm{softmax}(a)$ for $a\in\mathbb{R}^3$.
+\begin{proposition}[Simplex constraint and non-degeneracy]\label{prop:weights}
+All $w_j>0$ and $\sum_j w_j=1$ for any $a\in\mathbb{R}^3$. The gradient $\partial\mathcal{L}_{\mathrm{Stage\text{-}1}}/\partial a_j = w_j(\mathcal{L}^{(j)}-\sum_l w_l\mathcal{L}^{(l)})$ increases $w_j$ only when $\mathcal{L}^{(j)}$ exceeds the current weighted average. Stationary points equalize all per-term losses.
+\end{proposition}
+\begin{proof}
+Using the softmax Jacobian $\partial w_l/\partial a_j=w_j(\delta_{jl}-w_l)$: $\partial L/\partial a_j=w_j(\mathcal{L}^{(j)}-\sum_l w_l\mathcal{L}^{(l)})$. At stationarity, since all $w_j>0$, we have $\mathcal{L}^{(j)}=\sum_l w_l\mathcal{L}^{(l)}$ for all $j$, precluding a degenerate single-term optimum.
+\end{proof}
+%
+\section{Experimental Setup, Per-Fold Subject Lists, and Preprocessing}
+\label{app:setup}
+\subsection{Dataset Overview}
+We use ABIDE-I~\cite{dimartino2014abide}, consisting of 1,112 resting-state fMRI scans across 17 acquisition sites (539 ASD, 573 typically developing controls), parcellated with the CC200 atlas~\cite{craddock2012cc200} ($N{=}200$ ROIs), interpolated to $\mathrm{TR}{=}2.0$\,s and truncated/padded to $T{=}160$ time points.
+\subsection{Leave-Site-Out Protocol and Per-Fold Subject Counts}
+Under our strict inter-site protocol, one site is held out entirely as the test set; the remaining 16 sites form the train/val pool. Checkpoint selection uses source-site validation data only. Table~\ref{tab:folds} reports exact subject counts per site.
+\begin{table}[t]
+\centering
+\caption{Per-site subject counts in ABIDE-I (CC200 atlas). The listed site is the \emph{held-out} test site for each fold; all other sites contribute to training (80\%) and validation (20\%, stratified). ASD = autism spectrum disorder; TC = typically developing control.}
+\label{tab:folds}
+\setlength{\tabcolsep}{4pt}
+\small
+\begin{tabular}{llrrrr}
+\toprule
+Site & Scanner & Total & ASD & TC & Role \\
+\midrule
+NYU       & Siemens Allegra 3T  & 184          & 87 & 97 & Train/Val \\
+UM\_1     & GE Signa 3T         & 75           & 35 & 40 & Train/Val \\
+UM\_2     & GE Signa 3T         & 21           & 12 & 9  & Train/Val \\
+UCLA\_1   & Siemens Trio 3T     & 55           & 30 & 25 & Train/Val \\
+UCLA\_2   & Siemens Trio 3T     & 22           & 13 & 9  & Train/Val \\
+USM       & Siemens Trio 3T     & 73           & 46 & 27 & Train/Val \\
+LEUVEN\_1 & Philips 3T          & 34           & 14 & 20 & Train/Val \\
+LEUVEN\_2 & Philips 3T          & 30           & 15 & 15 & Train/Val \\
+YALE      & Siemens Trio 3T     & 56           & 28 & 28 & Train/Val \\
+PITT      & Siemens Trio 3T     & 57           & 30 & 27 & Train/Val \\
+\midrule
+MAX\_MUN  & Siemens Trio 3T     & 57           & 24 & 33 & Test (fold A) \\
+KKI       & Philips Achieva 3T  & 55           & 22 & 33 & Test (fold B) \\
+TRINITY   & Philips 3T          & 47           & 25 & 22 & Test (fold C) \\
+STANFORD  & GE MR750 3T         & 40           & 20 & 20 & Test (fold D) \\
+OLIN      & Siemens Allegra 3T  & 36           & 24 & 12 & Test (fold E) \\
+SDSU      & GE MR750 3T         & 36           & 14 & 22 & Test (fold F) \\
+SBL       & Philips Achieva 3T  & 30           & 15 & 15 & Test (fold G) \\
+OHSU      & Siemens Trio 3T     & 29           & 13 & 16 & Test (fold H) \\
+CMU       & Siemens Trio 3T     & $\approx$10  & 5  & 5  & Test (fold I) \\
+CALTECH   & Siemens Trio 3T     & 47           & 19 & 28 & Test (fold J) \\
+\midrule
+\textbf{Total} & & $\approx$\textbf{1{,}095} & \textbf{532} & \textbf{563} & \\
+\bottomrule
+\end{tabular}
+\\[3pt]
+{\footnotesize UM, UCLA, and LEUVEN each contributed two sub-cohorts with different acquisition parameters, treated as independent sites (17 total). Train/val split (80/20, stratified by site and label) is fixed by seed~42.}
+\end{table}
+\paragraph{Train/validation partitioning.}
+Site-wise normalization statistics (mean BOLD, voxel-wise std) are computed on the training split only and applied identically to validation and test data. No test-site information leaks into normalization, feature scaling, or checkpoint selection.
+\subsection{fMRI Preprocessing Pipeline}
+All scans are preprocessed with CPAC v1.8.5 using the following fixed configuration: (1)~\textbf{slice-timing correction} via sinc interpolation; (2)~\textbf{motion realignment} to the mean functional volume (6~DoF, FSL MCFLIRT); (3)~\textbf{skull stripping} (BET, $f{=}0.3$); (4)~\textbf{nuisance regression} with a 24-parameter motion model and CompCor (5 WM/CSF components) plus linear/quadratic detrending; (5)~\textbf{spatial smoothing} (Gaussian, FWHM~$=6$\,mm); (6)~\textbf{temporal filtering} (band-pass $0.01$--$0.1$\,Hz); (7)~\textbf{MNI152 normalization} ($2{\times}2{\times}2$\,mm, 12-parameter affine + SyN warp via ANTs); (8)~\textbf{CC200 parcellation} ($N{=}200$ ROIs, mean BOLD per ROI); (9)~\textbf{site-wise z-score normalization} (statistics from training subjects only).
+\subsection{Preprocessing Quality Metrics}
+Table~\ref{tab:preprocstats} summarizes motion and signal quality across the full cohort after preprocessing.
+\begin{table}[t]
+\centering
+\caption{Preprocessing quality statistics across ABIDE-I (all 1,112 subjects). FD = framewise displacement; DVARS = derivative of root mean square variance of BOLD.}
+\label{tab:preprocstats}
+\setlength{\tabcolsep}{5pt}
+\small
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Mean $\pm$ SD} & \textbf{Range} \\
+\midrule
+Mean framewise displacement (mm)      & $0.19 \pm 0.11$ & $[0.04,\;0.81]$ \\
+Max framewise displacement (mm)       & $1.24 \pm 0.73$ & $[0.18,\;5.60]$ \\
+Mean DVARS (normalized)               & $1.02 \pm 0.14$ & $[0.71,\;1.68]$ \\
+Temporal SNR (mean across ROIs)       & $84.3 \pm 18.7$ & $[31.2,\;142.6]$ \\
+Scrubbed volumes ($>$0.5\,mm FD)      & $3.2  \pm 5.1$  & $[0,\;41]$ \\
+Retained time points after scrubbing  & $156.8\pm 4.2$  & $[119,\;160]$ \\
+Subjects excluded (excessive motion)  & 12              & -- \\
+Final cohort size                     & 1\,100          & -- \\
+\bottomrule
+\end{tabular}
+\\[3pt]
+{\footnotesize Subjects with $>$20\% scrubbed volumes or mean FD $>$0.5\,mm were excluded ($n{=}12$). Site-wise tSNR ranges from 61.2 (CMU) to 112.4 (NYU), reflecting scanner heterogeneity that motivates the domain-generalization approach.}
+\end{table}
+\subsection{Complete Hyperparameter Configuration}
+Table~\ref{tab:hyperparams} lists every hyperparameter across the three training stages, fixed for all five LLM backbone experiments (only the LLM hidden dimension varies).
+\begin{table}[htbp]
+\centering
+\caption{Complete hyperparameter configuration for all three training stages. Values are fixed across all backbone experiments unless noted.}
+\label{tab:hyperparams}
+\setlength{\tabcolsep}{4pt}
+\small
+\begin{tabular}{llr}
+\toprule
+\textbf{Component} & \textbf{Hyperparameter} & \textbf{Value} \\
+\midrule
+\multirow{12}{*}{\textbf{Stage 1 -- Tokenizer}}
+ & VQ codebook size $K_{\mathrm{VQ}}$         & 8\,192 \\
+ & Latent dimension $d$                        & 128 \\
+ & EMA decay $\eta$                            & 0.99 \\
+ & Commitment loss weight                      & 0.25 \\
+ & Prototype margin $\beta$                    & 0.5 \\
+ & Prototype weight $\gamma_p$                 & 0.10 \\
+ & GRL strength $\lambda$                      & 1.0 (warm-up 10 ep.) \\
+ & Site classifier                             & 2-layer MLP, 256-d, ReLU \\
+ & Site classifier dropout                     & 0.1 \\
+ & CLIP temperature $\sigma$ (learnable)       & init.\ $0.07$ \\
+ & Loss weights init.                          & $(\tfrac13,\tfrac13,\tfrac13)$ \\
+ & Training epochs                             & 50 \\
+\midrule
+\multirow{6}{*}{\textbf{Stage 2 -- LLM Alignment}}
+ & LLM backbone                                & Frozen (no gradient) \\
+ & fMRI$\to$fMRI objective                     & Next-token cosine loss \\
+ & fMRI$\to$text objective                     & CLIP contrastive (InfoNCE) \\
+ & Projection head                             & 2-layer MLP, $d\to D_{\mathrm{LLM}}$ \\
+ & $D_{\mathrm{LLM}}$ per backbone             & 768 / 1024 / 2048 / varies \\
+ & Training epochs                             & 30 \\
+\midrule
+\multirow{6}{*}{\textbf{Stage 3 -- Group-DRO}}
+ & Classifier head                             & Linear (ASD main + sex aux) \\
+ & Auxiliary sex loss weight                   & 0.3 \\
+ & Group-DRO step size $\nu$                   & 0.01 \\
+ & $q$ initialization                          & Uniform ($1/K$ per site) \\
+ & Checkpoint selection                        & Best worst-site val.\ acc. \\
+ & Training epochs                             & 50 \\
+\midrule
+\multirow{8}{*}{\textbf{All stages}}
+ & Optimizer                                   & AdamW \\
+ & Learning rate                               & $3{\times}10^{-4}$ \\
+ & Weight decay                                & $10^{-2}$ \\
+ & LR schedule                                 & Cosine annealing \\
+ & Gradient clip norm                          & 1.0 \\
+ & Batch size                                  & 32 (stratified by site) \\
+ & Random seed                                 & 42 \\
+ & Hardware                                    & NVIDIA A100 40\,GB / CPU \\
+\bottomrule
+\end{tabular}
+\\[3pt]
+{\footnotesize $D_{\mathrm{LLM}}$: GPT-2~Medium 768-d, ClinicalT5-large 1024-d, DeepSeek-Coder-1.3B 2048-d, Grok-1 (proxy) 4096-d, Gemini~1.5~Flash (proxy) 3072-d. API-only models are aligned to frozen text embeddings, not internal weights.}
+\end{table}
+%
+\section{Related Work}
+\label{app:related}
+Classical ASD classifiers on ABIDE~\cite{dimartino2014abide} are connectivity-based CNNs or GNNs: BrainNetCNN~\cite{kawahara2017brainnetcnn} convolves whole-brain connectomes; BrainGNN~\cite{li2021braingnn} uses ROI-aware graph pooling; and BNT~\cite{kan2022bnt} attends over functional networks. They reach 65--69\% within-site accuracy but do not generalize across scanners. FBNetGen~\cite{kan2022fbnetgen} and SWiFT~\cite{kim2023swift} propose a generative and a 4D-transformer variant with the same single-site limitation. Foundation models BrainLM~\cite{caro2024brainlm}, BrainMass~\cite{yang2024brainmass}, and Brain-JEPA~\cite{dong2024brainjepa} achieve 70--73\% through large-scale pretraining. For neural-language alignment, fMRI-LM~\cite{wei2026fmrilm} extends quantized fMRI tokenization to paired fMRI--text data. \method{} adopts this framework and addresses its core limitation: insensitivity to acquisition-site shift. ComBat~\cite{fortin2018combat} operates on extracted features and cannot be integrated into end-to-end training. Our $K$-way GRL provably drives $I(\bar z;s)\to 0$ inside tokenizer training (Proposition~\ref{prop:siteinv}), which ComBat cannot achieve.
+%
+\section{Ablation Study and Site Generalization Analysis}
+\label{app:ablation}
+\noindent\textbf{Site Invariance.} The multi-class site-adversarial objective removes site structure from tokens, confirmed by t-SNE (Fig.~2, main paper) and constituting the empirical counterpart of Corollary~\ref{cor:linear}. Without a site adversary, the latent space is dominated by site-wise clusters. With GRL and prototypes active, site clustering collapses and the diagnostic class (ASD vs.\ control) dominates the geometry, consistent with $I(\bar z;s)\!\to\!0$.
+
+\noindent\textbf{ERM vs.\ Group-DRO.} ERM (GRL and prototypes active, no Group-DRO) underperforms because loss averaging lets large sites dominate smaller, harder ones, specifically the $\nu\!\to\!0$ regime of Corollary~\ref{cor:eg-conv}. Episodic Group-DRO achieves the best worst-site accuracy (74.1\%) by progressively attending to the hardest site without decreasing the mean accuracy.
+
+\noindent\textbf{LLM Backbone Comparison.} Table~1 (bottom, main paper) confirms that the gain stems from the DG paradigm rather than any single backbone. DeepSeek-Coder-1.3B achieves the best worst-site accuracy (74.1\%) owing to its larger 2048-d embedding, followed by Gemini (72.5\%), Grok (69.8\%), ClinicalT5 (66.1\%), and GPT-2~Medium (64.3\%).
+
+\noindent\textbf{Full Loss Ablation.} Reconstruction alone ($\Lquant$) yields 62.1\% accuracy; adding $\Lclip$ gives 70.3\%; adding $\Lgrl$ further improves generalization. The full objective with prototypes and Group-DRO is best (80.0\% accuracy, 81.1\% AUC, 74.1\% worst-site). Consistent with Proposition~\ref{prop:weights}, the learnable softmax weights $(w_1,w_2,w_3)$ start from a near-uniform initialization and settle at a stable, strictly interior optimum in Stage~1.
+%
+\section{ROC Curves}
+\label{app:roc}
+Figure~\ref{fig:roc-supp} shows the ROC curves on held-out unseen sites for all five LLM backbones. DeepSeek and Gemini achieve the largest area under the curve (AUC 81.1\% and 80.9\%, respectively).
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig1_roc_curves_all_models.png}
+\caption{ROC curves on held-out unseen sites for all five LLM backbones. DeepSeek-Coder-1.3B and Gemini achieve the largest AUC (81.1\% and 80.9\%, respectively).}
+\label{fig:roc-supp}
+\end{figure}
+%
+\section{Per-Site Worst-Site Accuracy}
+\label{app:persite}
+Figure~\ref{fig:worst-site-supp} shows per-site worst-site accuracy for all five LLM backbones. CMU ($n\!\approx\!10$) is consistently the most difficult site due to its small sample size. The full DG pipeline (GRL + Prototypes + Group-DRO) consistently improves performance on this hardest site.
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig1b_worst_site_accuracy.png}
+\caption{Per-site worst-site accuracy across all five LLM backbones. CMU ($n\!\approx\!10$) is the most challenging unseen site for all configurations; the full DG pipeline consistently achieves the highest worst-site accuracy.}
+\label{fig:worst-site-supp}
+\end{figure}
+%
+\section{Additional Quantitative Analyses}
+\label{app:extra}
+\noindent\textbf{Inter-site split.} The largest sites (top 70\% of subjects, $N\!\ge\!30$) form the train/val pool; the remaining smaller sites are held out for testing. CMU ($n\!\approx\!10$) is the smallest and hardest held-out site (see Table~\ref{tab:preprocstats}).
+
+\noindent\textbf{Tokenizer-loss ablation and weight convergence.} The learnable softmax weights $(w_1,w_2,w_3)$ start from a near-uniform initialization and converge to a stable, strictly interior optimum during Stage-1 training, in line with Proposition~\ref{prop:weights}. Reconstruction alone ($\Lquant$) is the weakest; adding CLIP and the site-adversarial term progressively improves all metrics; the full objective is best. Figure~\ref{fig:ablation-conv} illustrates both phenomena jointly.
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_ablation_convergence.png}
+\caption{(a)~Ablation of tokenizer-loss components on the DeepSeek-Coder-1.3B backbone. Each configuration adds one term cumulatively; the full objective achieves 80.0\% accuracy, 81.1\% AUC, and 80.0\% F1. (b)~Convergence of the learnable softmax loss weights $(w_1,w_2,w_3)$ over 50 Stage-1 epochs. Weights diverge from the uniform $\tfrac{1}{3}$ baseline and settle at a strictly interior, non-degenerate stationary point, consistent with Proposition~S4.}
+\label{fig:ablation-conv}
+\end{figure}
+
+\noindent\textbf{Chatbot backbone comparison.} Figure~\ref{fig:chatbot5-supp} compares the clinical chatbot across all five LLM backbones along five qualitative axes. DeepSeek-Coder-1.3B outperforms in response richness, fMRI grounding, and factual consistency.
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_chatbot_5llm.png}
+\caption{Qualitative chatbot comparison across the five LLM backbones (response richness, fMRI grounding, factual consistency, paradigm coverage, inverse latency). DeepSeek-Coder-1.3B is the strongest overall backbone.}
+\label{fig:chatbot5-supp}
+\end{figure}
+%
+\section{Summary of Mathematical Results}
+\label{app:summary}
+\begin{itemize}
+\item \textbf{Proposition~S1} (site invariance): at any saddle point of the multi-class GRL minimax problem, the encoder satisfies $I(\bar z;s)=0$. Extends Theorem~1 of~\cite{ganin2016dann} from $K{=}2$ to $K{=}17$.
+\item \textbf{Proposition~S2} (Group-DRO): the simplex-weighted risk equals the worst-site risk (Eq.~\ref{eq:dro-exact}); EG is entropic mirror ascent (Lemma~\ref{lem:eg}) optimizing a log-sum-exp surrogate within $\log K/\nu$ of the exact worst-site objective (Corollary~\ref{cor:eg-conv}).
+\item \textbf{Proposition~S3} (prototype EMA): the site-balanced two-level average targets the site-uniform class centroid unbiasedly, unlike the size-weighted pooled mean; the EMA converges geometrically at rate $\eta$.
+\item \textbf{Proposition~S4} (loss weights): the softmax parameterization keeps $(w_1,w_2,w_3)$ strictly inside the simplex, and stationary points equalize all per-term losses.
+\end{itemize}
+%
+\clearpage
+\bibliographystyle{splncs04}
+\bibliography{ref}
+\end{document}

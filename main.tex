@@ -1,0 +1,313 @@
+% NeuroLingua-Bridge -- ELAMI 2026 (Springer LNCS, runningheads)
+% Built on the official LLNCS template (llncs.cls v2.24).
+\documentclass[runningheads]{llncs}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{color}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\usepackage{cleveref}
+\renewcommand\UrlFont{\color{blue}\rmfamily}
+\urlstyle{rm}
+
+% --- Modest spacing to meet the page limit (body font, margins and layout unchanged) ---
+\setlength{\textfloatsep}{4pt plus 1pt minus 1pt}
+\setlength{\floatsep}{4pt plus 1pt minus 1pt}
+\setlength{\intextsep}{4pt plus 1pt minus 1pt}
+\setlength{\abovecaptionskip}{2pt}
+\setlength{\belowcaptionskip}{0pt}
+\usepackage{caption}
+\captionsetup{font=small}
+\usepackage{etoolbox}
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{\z@}%
+  {-7\p@ \@plus -1\p@ \@minus -1\p@}{3\p@ \@plus 1\p@ \@minus 1\p@}%
+  {\normalfont\large\bfseries\boldmath}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+  {-5\p@ \@plus -1\p@ \@minus -1\p@}{2\p@ \@plus 1\p@ \@minus 1\p@}%
+  {\normalfont\normalsize\bfseries\boldmath}}
+\makeatother
+% References one step smaller than the \small default, with zero inter-item spacing, to meet the page limit
+\AtBeginEnvironment{thebibliography}{\scriptsize}
+\makeatletter
+\patchcmd{\thebibliography}{\usecounter{enumiv}}{\usecounter{enumiv}\itemsep\z@\parsep\z@}{\typeout{BIBPATCH-OK}}{\typeout{BIBPATCH-FAIL}}
+\makeatother
+
+\newcommand{\method}{\textsc{NeuroLingua-Bridge}}
+\newcommand{\Lquant}{\mathcal{L}_{\mathrm{quant}}}
+\newcommand{\Lclip}{\mathcal{L}_{\mathrm{CLIP}}}
+\newcommand{\Lgrl}{\mathcal{L}_{\mathrm{site}}}
+\newcommand{\Lproto}{\mathcal{L}_{\mathrm{proto}}}
+\newcommand{\Ltok}{\mathcal{L}_{\mathrm{tok}}}
+
+\begin{document}
+
+\title{Diagnosis of Autism Spectrum Disorder using LLMs and Multimodal Brain Connectivity Analysis}
+\titlerunning{NeuroLingua-Bridge: ASD Diagnosis via LLMs and Brain Connectivity}
+\author{Khalid El Khamlichi \and Fatima Ez-Zahraa Bazay \and Ahmed Drissi El Maliani}
+\authorrunning{K. El Khamlichi et al.}
+\institute{Faculty of Sciences, Mohammed V University, Rabat, Morocco\\
+\email{khalid\_elkhamlichi@um5.ac.ma}}
+
+\maketitle
+
+\begin{abstract}
+We present \method{}, a framework for site-invariant Autism Spectrum Disorder (ASD) 
+diagnosis that maps resting-state functional MRI (fMRI) into the token space of a large language model (LLM) while remaining invariant to the acquisition site. 
+Language-aligned fMRI representations degrade sharply across the seventeen sites 
+of ABIDE-I, where scanner and protocol differences dominate the diagnostic signal. 
+Our framework trains a text-aligned tokenizer jointly with three domain-generalization 
+components, namely a multi-class $K$-way site-adversarial gradient-reversal layer, 
+site-balanced dynamic latent prototypes, and episodic Group Distributionally Robust 
+Optimization (Group-DRO) for the worst-performing site. Under a strict leave-site-out protocol on ABIDE-I across 17 sites parcellated with the CC200 atlas, \method{} reaches $80.0\%$ accuracy, $81.1\%$ AUC, and $74.1\%$ worst-site accuracy, a 15.9-point improvement over a site-agnostic variant, outperforming supervised and foundation-model baselines despite a stricter evaluation protocol. The code is available 
+at \url{https://github.com/khalidelkhamlichi9/ASD-Diagnosis-via-LLMs-and-Brain-Connectivity-}.
+\keywords{Autism spectrum disorder \and Domain generalization \and Resting-state 
+fMRI \and Large language models \and Site harmonization.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+Resting-state fMRI provides noninvasive information about intrinsic brain function, 
+but multi-center analysis is confounded by acquisition-site domain shift, where scanner, 
+protocol, and population differences induce distribution changes that are unrelated to 
+the diagnostic label. On ABIDE-I~\cite{dimartino2014abide}, Autism Spectrum Disorder 
+(ASD) classifiers reach $65$--$75\%$ accuracy within a single site but drop sharply once 
+evaluated across its seventeen sites.
+
+Language-aligned tokenizers embed brain activations in the token space of a pretrained large language model~\cite{wei2026fmrilm} but include no site-specific mechanism. A site-agnostic tokenizer of this kind, meaning our framework with the domain-generalization components removed, drops from ${\sim}76\%$ within-site to $68.4\%$ across sites, indicating that site shift, rather than diagnostic difficulty, is the dominant failure mode.
+
+Existing approaches address this problem only partially. Connectivity-based supervised models such as BNT~\cite{kan2022bnt}, BrainGNN~\cite{li2021braingnn}, and 
+BrainNetCNN~\cite{kawahara2017brainnetcnn} reach $65$--$69\%$ accuracy but train and 
+test within the same site, failing to generalize across scanners. Foundation 
+models~\cite{caro2024brainlm,dong2024brainjepa} attain $70$--$73\%$ through large-scale pretraining yet lack explicit site adaptation. Statistical harmonization via ComBat~\cite{fortin2018combat} removes batch effects on extracted features but cannot act on learned representations. Binary Domain-Adversarial Neural Network (DANN) training treats all sites as a single nuisance domain and therefore cannot distinguish the $K{=}17$ heterogeneous scanners of ABIDE-I. None of these methods directly integrates site invariance into a language-aligned diagnostic framework. Rather than treating site shift as a post-hoc preprocessing step, we build site invariance directly into the model. This work addresses four research questions:
+
+\textbf{RQ1}~Does $K$-way multi-class site-adversarial learning reduce site shift better than both the site-agnostic fMRI-LM objective and a binary GRL?
+
+\textbf{RQ2}~Do site-balanced latent prototypes improve class separability once site information is removed? 
+
+\textbf{RQ3}~Does episodic Group-DRO improve worst-site generalization on the hardest unseen scanner? 
+
+\textbf{RQ4}~Does the LLM embedding space provide gains beyond a matched-dimensionality non-linguistic projection, and are these gains consistent across architectures?
+
+To address these questions, we propose \method{}, whose tokenizer is trained jointly with a multi-class $K$-way site 
+adversary, site-balanced dynamic prototypes~\cite{vandenoord2017vqvae}, and episodic Group-DRO~\cite{sagawa2020groupdro}, then aligned to frozen LLM embedding spaces via CLIP-style objectives~\cite{radford2021clip}.
+
+\section{Method}
+\label{sec:method}
+\subsection{Overview and Preprocessing}
+\label{sec:method-overview}
+The complete \method{} pipeline is shown in \cref{fig:method}. Each fMRI scan is preprocessed via CPAC, parcellated with CC200 ($N{=}200$), interpolated to $\mathrm{TR}{=}2.0$\,s ($T{=}160$), and site-wise normalized. All normalization statistics are computed on training sites only and never leak test-site information.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_llms_paper.png}
+\caption{Overview of the \method{} pipeline: 
+(a)~fMRI preprocessing with CPAC and structured 
+fMRI--text descriptor construction; 
+(b)~text-aligned tokenizer with $17$-way 
+site-adversarial gradient-reversal layer (GRL) 
+and dynamic latent prototypes; 
+(c)~frozen-LLM alignment across five backbone
+embedding spaces;
+(d)~episodic Group-DRO meta-learning for
+cross-site generalization;
+(e)~clinical output and chatbot interface.}
+\label{fig:method}
+\end{figure}
+
+\subsection{fMRI-Text Descriptor Construction}
+\label{sec:method-desc}
+Lacking natural fMRI--text pairs, each scan is converted into structured text by inserting four feature sets into predefined templates: functional connectivity, functional gradients, ICA dynamics, and graph metrics.
+
+\subsection{Stage 1: Text-Aligned fMRI Tokenizer}
+\label{sec:method-stage1}
+Each sequence is encoded by a transformer encoder into a latent space quantized by a normalized EMA vector quantizer with $K{=}8192$ codes of dimension $d{=}128$~\cite{vandenoord2017vqvae}. The decoder reconstructs the signal:
+\begin{equation}
+\Lquant = \lVert X - D_\phi(\tilde z)\rVert_2^2 + \mathcal{L}_{\mathrm{commit}}.
+\label{eq:quant}
+\end{equation}
+Using the descriptor pairs (\cref{sec:method-desc}), a CLIP-like contrastive loss~\cite{radford2021clip} pulls matching fMRI--text pairs together while pushing mismatched pairs apart:
+\begin{equation}
+\Lclip = -\frac{1}{B}\sum_{i=1}^{B}
+\log \frac{\exp\!\big(\sigma\,\mathrm{sim}(z_i, z_i^{+})\big)}
+{\sum_{j=1}^{B}\exp\!\big(\sigma\,\mathrm{sim}(z_i, z_j^{+})\big)},
+\label{eq:clip}
+\end{equation}
+with cosine similarity $\mathrm{sim}(\cdot,\cdot)$, temperature $\sigma$, and batch size $B$.
+
+\subsection{Multi-Class Site-Adversarial Learning}
+\label{sec:method-grl}
+The fMRI--text discriminator in fMRI-LM~\cite{wei2026fmrilm} ignores the site $k\in\{1,\dots,K{=}17\}$ and therefore cannot separate site structure. We add a site classifier $D_\psi:\mathbb{R}^C\!\to\!\Delta^{K-1}$ preceded by a gradient-reversal layer $\mathcal{R}_\lambda$~\cite{ganin2016dann}, which acts as the identity in the forward pass and multiplies the gradient by $-\lambda$ in the backward pass,
+\begin{equation}
+\Lgrl = -\frac{1}{B}\sum_{i=1}^{B}\sum_{k=1}^{K}
+\mathbb{1}[s_i{=}k]\,\log\big[D_\psi(\mathcal{R}_\lambda(\bar z_i))\big]_k .
+\label{eq:site}
+\end{equation}
+This yields the minimax problem $\min_{\theta}\max_{\psi}\ \mathcal{L}_{\mathrm{task}}-\lambda\,\Lgrl$: $D_\psi$ is trained to recognize the site, while the GRL forces the encoder $E_\theta$ to remove any discriminative site information.
+
+A standard binary DANN~\cite{ganin2016dann} collapses all 17 scanners into one nuisance label, removing only the mean domain shift but not the heterogeneous per-scanner structure. Our $K{=}17$-way formulation lets the discriminator exploit inter-scanner differences individually, yielding stronger invariance (see ablation in \cref{sec:exp-main}).
+
+\emph{Site-invariance property.} It can be shown (see Prop.~S1) that at any saddle point the latent representation $\bar z$ satisfies $I(\bar z\,;\,s)=0$; this generalizes the two-site setting of~\cite{ganin2016dann} to $K{=}17$. In practice, adversarial training only approaches this optimum, and we report the site-cluster collapse in \cref{fig:tsne} as empirical evidence.
+
+\subsection{Dynamic Latent Prototypes}
+\label{sec:method-proto}
+To enforce class geometry in the invariant space, we introduce $C=2$ prototypes $\{\mu_c\}\subset\mathbb{R}^{C}$, 
+one per class; each token is attracted to its own prototype and repelled from the others:
+\begin{equation}
+\Lproto = \frac{1}{B}\sum_{i=1}^{B}
+\Big[\,\lVert \bar z_i-\mu_{c_i}\rVert_2^2
+-\beta\,\textstyle\min_{c\neq c_i}\lVert \bar z_i-\mu_{c}\rVert_2^2\,\Big].
+\label{eq:proto}
+\end{equation}
+The prototypes are not optimizer parameters but evolve by an Exponential Moving Average (EMA)~\cite{vandenoord2017vqvae} of the site-balanced class means so that no single site dominates a prototype:
+\begin{equation}
+\mu_c \leftarrow \eta\,\mu_c + (1-\eta)\,
+\frac{1}{K}\sum_{k=1}^{K}
+\frac{\sum_{i:\,c_i=c,\,s_i=k}\bar z_i}{\lvert\{i:c_i=c,s_i=k\}\rvert}.
+\label{eq:ema}
+\end{equation}
+Averaging first over subjects within a site and then over sites prevents any single site from overwhelming a prototype. In Stage-1, the objective is $\mathcal{L}_{\mathrm{Stage\text{-}1}}=
+\Ltok+\gamma_p\Lproto$ with $\gamma_p{=}0.10$, where $\Ltok=w_1\Lquant+w_2\Lclip+w_3\Lgrl$ combines the tokenizer terms with learnable softmax-normalized weights $(w_1,w_2,w_3)$.
+
+\subsection{Stage 2: LLM Alignment}
+\label{sec:method-stage2}
+The tokenizer outputs are aligned to a fixed LLM embedding space with 
+fMRI-to-fMRI and fMRI-to-text cosine objectives~\cite{radford2021clip}. 
+DeepSeek-Coder-1.3B~\cite{deepseek2024} with a $2048$-d embedding space is the 
+primary backbone, selected because its large embedding space yields the best 
+prototype separability among the five candidates, as confirmed by the backbone 
+study in \cref{sec:exp-backbone}. For the backbone study (RQ4) we rerun 
+the full pipeline, all other components fixed, on GPT-2 Medium~\cite{radford2019gpt2} 
+and ClinicalT5-large~\cite{raffel2020t5} aligned through their hidden states, and 
+on the frozen text embeddings of the API-only models Grok and Gemini, which 
+probe embedding spaces rather than trainable backbones.
+
+\subsection{Stage 3: Episodic Meta-Learning 
+for Cross-Site Generalization}
+\label{sec:method-dro}
+The attention-pooling layer is followed by a main ASD classifier head and a secondary sex classifier head with weight $0.3$. Because empirical risk minimization lets 
+large sites dominate, we use Group-DRO~\cite{sagawa2020groupdro}, with $\mathcal{L}_k(\theta)$ the loss at site $k$:
+\begin{equation}
+\min_{\theta}\;\max_{q\in\Delta^{K-1}}\;
+\sum_{k=1}^{K} q_k\,\mathcal{L}_k(\theta)
+\;=\;\min_{\theta}\;\max_k\;
+\mathcal{L}_k(\theta), 
+\label{eq:dro}
+\end{equation}
+where the equality holds because the maximum over $q\in\Delta^{K-1}$ is attained at the vertex placing all weight on the worst-performing site, and the 
+adversarial distribution $q$ is updated by exponentiated gradients $q_k\propto q_k\exp(\nu\,\mathcal{L}_k)$, 
+placing more weight on harder sites. We retain the checkpoint with the best worst-site source validation accuracy.
+
+\section{Experiments}
+\label{sec:exp}
+\noindent\textbf{Evaluation protocol.} All models use leave-site-out evaluation where target sites are held out and unseen, 
+and training and checkpoint selection use source-site data only. We report results on ABIDE-I~\cite{dimartino2014abide} (17 sites, CC200 atlas) in terms of inter-site performance following \cref{sec:method-overview}, with mean\,$\pm$\,std across $5$ seeds.
+
+\subsection{RQ1--RQ3: Contribution of Each Domain-Generalization Module}
+\label{sec:exp-main}
+\cref{tab:main} (first block) reports an incremental ablation on DeepSeek-Coder-1.3B. A binary GRL that collapses all 17 sites into a single nuisance domain gains only $+2.5$ accuracy and $+3.1$ worst-site accuracy over the no-DG baseline (\textbf{RQ1}), whereas the $17$-way GRL gains $+6.1$/$+8.6$, showing that multi-class site discrimination is essential for heterogeneous multi-scanner data. Dynamic prototypes (\textbf{RQ2}) add a further $+2.7$/$+4.1$ by restoring class geometry after site information is removed; and episodic Group-DRO (\textbf{RQ3}) reaches $80.0\%$ mean and $74.1\%$ worst-site accuracy ($+11.6$/$+15.9$ total), the largest gains where deployment is hardest.
+
+The ``No LLM'' row replaces Stage~2 with the identity (the DG pipeline operates in the raw tokenizer space without any language alignment). The $+8.0$-point accuracy gap between the No-LLM and LLM-aligned configurations confirms that the LLM embedding space provides structure beyond what the DG modules alone can achieve.
+
+\begin{table}[t]
+\centering
+\caption{Ablation of DG modules and backbone comparison on ABIDE-I 
+(inter-site, $5$ seeds, mean\,$\pm$\,std). First block: sequential inclusion of GRL variants, prototypes, and Group-DRO on DeepSeek-Coder-1.3B. Second block: same full DG pipeline across five embedding spaces. Best per column in bold.}
+\label{tab:main}
+\resizebox{\linewidth}{!}{%
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccc}
+\toprule
+Configuration / Backbone & Acc $\pm$ std & AUC $\pm$ std & F1 $\pm$ std & W-Site$^\dagger$ $\pm$ std\\
+\midrule
+\multicolumn{5}{l}{\emph{DG module ablation (DeepSeek-Coder-1.3B)}}\\
+\quad No DG (GRL disabled, $\lambda{=}0$) & $68.4${\scriptsize$\pm1.2$} & $69.0${\scriptsize$\pm1.3$} & $68.3${\scriptsize$\pm1.1$} & $58.2${\scriptsize$\pm2.1$}\\
+\quad + Binary GRL ($K{=}2$)       & $70.9${\scriptsize$\pm1.1$} & $71.5${\scriptsize$\pm1.2$} & $70.7${\scriptsize$\pm1.0$} & $61.3${\scriptsize$\pm2.0$}\\
+\quad + $17$-way GRL ($K{=}17$)    & $74.5${\scriptsize$\pm1.0$} & $75.8${\scriptsize$\pm1.1$} & $74.4${\scriptsize$\pm1.0$} & $66.8${\scriptsize$\pm1.8$}\\
+\quad + GRL + Prototypes           & $77.2${\scriptsize$\pm0.9$} & $78.6${\scriptsize$\pm0.9$} & $77.1${\scriptsize$\pm0.8$} & $70.9${\scriptsize$\pm1.5$}\\
+\quad + GRL + Proto + G-DRO        & $\mathbf{80.0}${\scriptsize$\pm0.7$} & $\mathbf{81.1}${\scriptsize$\pm0.8$} & $\mathbf{79.9}${\scriptsize$\pm0.7$} & $\mathbf{74.1}${\scriptsize$\pm1.3$}\\
+\quad No LLM (full DG, no Stage~2) & $72.0${\scriptsize$\pm1.0$} & $73.5${\scriptsize$\pm1.1$} & $71.8${\scriptsize$\pm1.0$} & $63.0${\scriptsize$\pm1.7$}\\
+\midrule
+\multicolumn{5}{l}{\emph{Full DG pipeline across backbones / embedding spaces}}\\
+\quad Rand. Proj. ($D{=}2048$, no lang.)   & $68.5${\scriptsize$\pm1.2$} & $69.1${\scriptsize$\pm1.3$} & $68.2${\scriptsize$\pm1.2$} & $58.8${\scriptsize$\pm2.0$}\\
+\quad GPT-2 Medium~\cite{radford2019gpt2}  & $76.0${\scriptsize$\pm1.1$} & $76.2${\scriptsize$\pm1.2$} & $75.8${\scriptsize$\pm1.1$} & $64.3${\scriptsize$\pm1.9$}\\
+\quad ClinicalT5-large~\cite{raffel2020t5} & $77.0${\scriptsize$\pm1.0$} & $77.9${\scriptsize$\pm1.1$} & $77.0${\scriptsize$\pm1.0$} & $66.1${\scriptsize$\pm1.7$}\\
+\quad DeepSeek-1.3B~\cite{deepseek2024}    & $\mathbf{80.0}${\scriptsize$\pm0.7$} & $\mathbf{81.1}${\scriptsize$\pm0.8$} & $79.9${\scriptsize$\pm0.7$} & $\mathbf{74.1}${\scriptsize$\pm1.3$}\\
+\quad Grok (frozen emb.)$^{\ddagger}$      & $79.0${\scriptsize$\pm0.9$} & $79.6${\scriptsize$\pm0.9$} & $79.0${\scriptsize$\pm0.8$} & $69.8${\scriptsize$\pm1.6$}\\
+\quad Gemini (frozen emb.)$^{\ddagger}$    & $80.0${\scriptsize$\pm0.8$} & $80.9${\scriptsize$\pm0.8$} & $\mathbf{80.0}${\scriptsize$\pm0.8$} & $72.5${\scriptsize$\pm1.4$}\\
+\bottomrule
+\end{tabular}}%
+\\[3pt]
+{\footnotesize $^\dagger$~The worst site is CMU ($n\!\approx\!10$) in all configurations; the small $n$ explains the wider variance on W-Site. $^{\ddagger}$~Grok-1 and Gemini 1.5 Flash are API-only; we align to their frozen text embeddings, not the models themselves.}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Fair comparison under the same inter-site protocol: each architecture is evaluated without and with LLM alignment (DeepSeek-Coder-1.3B, Stage~2). All models use our leave-site-out splits, GRL, prototypes, and Group-DRO. $\Delta$ is the accuracy gain from adding the LLM. Best overall in bold.}
+\label{tab:sota}
+\resizebox{\linewidth}{!}{%
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l ccc ccc c}
+\toprule
+ & \multicolumn{3}{c}{Without LLM (DG only)} & \multicolumn{3}{c}{With LLM (+DeepSeek+DG)} & \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Backbone & Acc & AUC & W-Site & Acc & AUC & W-Site & $\Delta$Acc\\
+\midrule
+ComBat+MLP~\cite{fortin2018combat}   & $59.3$ & $61.6$ & $43.3$ & $74.5$ & $75.8$ & $65.4$ & $+15.2$\\
+BrainGNN~\cite{li2021braingnn}       & $71.5$ & $72.8$ & $62.0$ & $75.2$ & $76.5$ & $66.8$ & $+3.7$\\
+SWiFT~\cite{kim2023swift}            & $74.8$ & $76.0$ & $66.2$ & $76.8$ & $77.9$ & $68.5$ & $+2.0$\\
+\method{} (Ours)                      & $72.0$ & $73.5$ & $63.0$ & $\mathbf{80.0}$ & $\mathbf{81.1}$ & $\mathbf{74.1}$ & $+8.0$\\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\textwidth]{figures/Analyse t-SNE sans et avec prototypes_1.png}
+\caption{t-SNE of latent tokens (DeepSeek-Coder-1.3B). 
+Without the GRL (a), tokens cluster by acquisition site. With GRL and prototypes (b), site clusters dissolve and diagnostic groups separate around the learned prototypes $\mu_1,\mu_2$ (stars), confirming $I(\bar z;s)\!\to\!0$. For visual clarity, only the 6 training sites with the most balanced ASD/Control ratio are shown to prevent severe overplotting and preserve the visibility of the class geometry.}
+\label{fig:tsne}
+\end{figure}
+
+
+\subsection{RQ4: LLM Contribution and Backbone Generality}
+\label{sec:exp-backbone}
+To isolate the role of the LLM, \cref{tab:sota} compares each architecture in two configurations: \emph{without LLM} (model + DG components only, no Stage-2 alignment) and \emph{with LLM} (+~DeepSeek-Coder-1.3B alignment), under the same inter-site protocol. All baselines were retrained with our leave-site-out splits, GRL, prototypes, and Group-DRO, ensuring a controlled comparison.
+
+The LLM-aligned variant consistently outperforms the non-aligned one across all architectures: ComBat+MLP gains $+15.2$ pp, BrainGNN $+3.7$ pp, SWiFT $+2.0$ pp, and \method{} $+8.0$ pp. These gains demonstrate that the LLM embedding space provides linguistic-geometric structure that helps class separability beyond what the DG modules alone achieve. The largest gain ($+15.2$ pp for ComBat) occurs when the base representation is weakest, suggesting that LLM alignment compensates most effectively for impoverished feature spaces.
+
+Furthermore, the consistency across five LLM backbones in the second block of \cref{tab:main} (all above the no-DG baseline) confirms that the improvement is a property of the DG + language-alignment paradigm rather than an artifact of one backbone (\textbf{RQ4}). This is visible in \cref{fig:tsne}: site clusters in the raw feature space dissolve under the DG modules, while the classes separate around their prototypes.
+
+\noindent\textbf{Qualitative interface.} \method{} can also present predictions in three conversational modes (\cref{fig:chatbot}), a qualitative demonstration grounded in model predictions and network attributions; the displayed coefficients correspond to the learned Stage-1 weights $(w_1,w_2,w_3)$.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.56\textwidth]{figures/Deepseek-chatbot.png}
+\caption{Example predictive interface based on \method{}: DeepSeek-Coder-1.3B answering one patient in three conversational modes, each grounded in the model's prediction and its network attributions (e.g. an amygdala--prefrontal disconnection cue); a qualitative illustration, not a clinical validation.}
+\label{fig:chatbot}
+\end{figure}
+
+\FloatBarrier
+
+\section{Discussion}
+\label{sec:discussion}
+The binary GRL reduces site shift partially ($+2.5$ acc), while the $17$-way GRL captures the heterogeneous per-scanner structure ($+6.1$ acc). Prototypes turn the latent geometry from site-driven to diagnosis-driven (\cref{fig:tsne}); Group-DRO exploits this space to boost generalization on the hardest scanner. The ``No LLM'' ablation and \cref{tab:sota} show that the LLM embedding space adds a further $+8.0$ points over the DG modules alone, consistently across five embedding spaces and four architectures. This confirms the gain is a property of the paradigm, achieved under a strict, deployment-like protocol.
+
+\textbf{Limitations \& Future Work.}
+While \method{} achieves robust cross-site generalization, frozen LLMs may constrain domain adaptation, and API-only models (Grok, Gemini) use proxy embeddings. Future work will explore parameter-efficient fine-tuning (LoRA/PEFT), multi-modal integration (sMRI/DTI), and validation on larger cohorts (ABIDE~II~\cite{dimartino2017abide2}, UK Biobank).
+
+\section{Conclusion}
+\label{sec:conclusion}
+We introduced \method{}, coupling a text-aligned fMRI tokenizer with a $17$-way site-adversarial GRL, site-balanced prototypes, and episodic Group-DRO. Under a strict inter-site protocol on ABIDE-I, it reaches $80.0\%$ accuracy and $74.1\%$ worst-site accuracy ($+15.9$ pp over the no-DG baseline), outperforming both non-aligned and LLM-aligned SOTA methods.
+
+\bibliographystyle{splncs04}
+\bibliography{ref}
+
+\end{document}

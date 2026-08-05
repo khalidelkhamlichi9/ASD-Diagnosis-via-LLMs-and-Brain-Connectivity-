@@ -352,3 +352,91 @@ Brain-JEPA) *despite* the stricter inter-site protocol with unseen scanners at
 test time, and is the only method reporting a worst-site figure.
 
 ---
+
+## Paper & Preprint
+
+> **Diagnosis of Autism Spectrum Disorder using LLMs and Multimodal Brain Connectivity Analysis**
+> Khalid El Khamlichi, Fatima Ez-Zahraa Bazay, Ahmed Drissi El Maliani
+> *arXiv preprint arXiv:2511.21760 (2026)*
+
+```
+@article{elkhamlichi2026neurolinguabridge,
+  title   = {Diagnosis of Autism Spectrum Disorder using LLMs
+             and Multimodal Brain Connectivity Analysis},
+  author  = {El Khamlichi, Khalid and Bazay, Fatima Ez-Zahraa
+             and Drissi El Maliani, Ahmed},
+  journal = {arXiv preprint arXiv:2511.21760},
+  year    = {2026}
+}
+```
+
+---
+
+## Compiling the Paper (LaTeX)
+
+Both `main.tex` and `supplementary.tex` use the Springer LNCS template (`llncs.cls`).
+Run the following sequence from the project root:
+
+```bash
+# Main paper (8 pages)
+pdflatex  main.tex
+bibtex    main
+pdflatex  main.tex
+pdflatex  main.tex
+
+# Supplementary material
+pdflatex  supplementary.tex
+bibtex    supplementary
+pdflatex  supplementary.tex
+pdflatex  supplementary.tex
+```
+
+> **Dependencies:** `llncs.cls`, `splncs04.bst`, `booktabs`, `multirow`,
+> `subcaption`, `hyperref`, `cleveref`, `amsmath`, `amssymb`, `amsthm`,
+> `graphicx`, `caption`, `etoolbox`, `float`, `placeins`.
+> All are included in a standard TeX Live / MiKTeX installation.
+
+---
+
+## Publishing to GitHub
+
+```bash
+# First-time setup
+git init
+git remote add origin https://github.com/khalidelkhamlichi9/ASD-Diagnosis-via-LLMs-and-Brain-Connectivity-.git
+
+# Stage, commit, and push
+git add .
+git commit -m "feat: NeuroLingua-Bridge — final release (arXiv:2511.21760)"
+git branch -M main
+git push -u origin main
+
+# Subsequent updates
+git add .
+git commit -m "fix: <description of change>"
+git push
+```
+
+> **Note:** checkpoint files (`*.pt`) are large (50–111 MB each).
+> Add them to Git LFS or `.gitignore` if you do not want to push them:
+>
+> ```bash
+> git lfs install
+> git lfs track "*.pt"
+> git add .gitattributes
+> ```
+
+---
+
+## License
+
+This project is released under the **MIT License** — see [`LICENSE`](LICENSE) for details.
+
+---
+
+## Contact
+
+**Khalid El Khamlichi** — [khalid_elkhamlichi@um5.ac.ma](mailto:khalid_elkhamlichi@um5.ac.ma)
+Faculty of Sciences, Mohammed V University, Rabat, Morocco.
+
+Issues and pull requests are welcome.
