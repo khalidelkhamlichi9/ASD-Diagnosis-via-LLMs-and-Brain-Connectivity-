@@ -34,7 +34,7 @@ domain-generalization (DG) components:
 
 - **Dataset:** ABIDE-I (17 acquisition sites)
 - **Pipeline:** CPAC
-- **Atlas:** CC200 — 200 ROIs, used natively (no re-parcellation)
+- **Atlas:** CC200 - 200 ROIs, used natively (no re-parcellation)
 - **Temporal:** interpolated to TR = 2.0 s, T = 160 time points
 - **Normalization:** z-scored, then site-wise variance-normalized
 
